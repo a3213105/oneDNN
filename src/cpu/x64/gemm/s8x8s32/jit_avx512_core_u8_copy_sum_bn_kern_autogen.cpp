@@ -228,10 +228,10 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         L(labels[1]);
         test(M, 0x8);
         jle(labels[2], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
-        movq(xmm1, qword[A1 + LDA * 1 - 0x80]);
-        movq(xmm2, qword[A1 + LDA * 2 - 0x80]);
-        movq(xmm3, qword[A1 + LDA3 * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 + LDA * 2 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 + LDA3 * 1 - 0x80]);
         sub(A1, -8);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -256,10 +256,10 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         pmovzxwd(xmm5, xmm5);
         paddd(xmm8, xmm5);
         movdqu(xword[B - 0x60], xmm1);
-        movq(xmm0, qword[A2 - 0x80]);
-        movq(xmm1, qword[A2 + LDA * 1 - 0x80]);
-        movq(xmm2, qword[A2 + LDA * 2 - 0x80]);
-        movq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A2 - 0x80]);
+        uni_vmovq(xmm1, qword[A2 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A2 + LDA * 2 - 0x80]);
+        uni_vmovq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
         sub(A2, -8);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -387,7 +387,7 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         pmovzxbd(xmm6, xmm6);
         paddd(xmm8, xmm5);
         paddd(xmm9, xmm6);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -480,11 +480,11 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         L(labels[10]);
         test(M, 0x8);
         jle(labels[11], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
-        movq(xmm1, qword[A1 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 + LDA * 1 - 0x80]);
         sub(A1, -8);
-        movq(xmm2, qword[A2 - 0x80]);
-        movq(xmm3, qword[A2 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A2 - 0x80]);
+        uni_vmovq(xmm3, qword[A2 + LDA * 1 - 0x80]);
         sub(A2, -8);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -554,7 +554,7 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         phaddw(xmm5, xmm5);
         pmovzxwd(xmm5, xmm5);
         paddd(xmm7, xmm5);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -639,9 +639,9 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         L(labels[18]);
         test(M, 0x8);
         jle(labels[19], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         sub(A1, -8);
-        movq(xmm1, qword[A2 - 0x80]);
+        uni_vmovq(xmm1, qword[A2 - 0x80]);
         sub(A2, -8);
         punpckldq(xmm0, xmm1);
         maybe_perform_s8_shift_xmm(xmm0);
@@ -672,7 +672,7 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         phaddw(xmm5, xmm5);
         pmovzxwd(xmm5, xmm5);
         paddd(xmm7, xmm5);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -712,7 +712,7 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
 
         L(labels[22]);
         mov(A1, qword[ARG_BIAS]);
-        movq(qword[A1], xmm7);
+        uni_vmovq(qword[A1], xmm7);
         add(qword[ARG_BIAS], 0x8);
         sub(N, 0x2);
         cmp(N, 0x2);
@@ -755,7 +755,7 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         L(labels[26]);
         test(M, 0x8);
         jle(labels[27], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         sub(A1, -8);
         maybe_perform_s8_shift_xmm(xmm0);
         pmovzxbw(xmm5, xmm0);
@@ -764,7 +764,7 @@ void jit_avx512_core_u8_copy_sum_bn_kern::generate() {
         phaddw(xmm5, xmm5);
         pmovzxwd(xmm5, xmm5);
         paddd(xmm7, xmm5);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 

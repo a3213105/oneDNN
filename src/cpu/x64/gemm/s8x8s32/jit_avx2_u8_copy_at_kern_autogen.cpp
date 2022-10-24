@@ -185,10 +185,10 @@ void jit_avx2_u8_copy_at_kern::generate() {
         L(labels[0]);
         test(M, 0x8);
         jle(labels[2], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
-        movq(xmm1, qword[A1 + LDA * 1 - 0x80]);
-        movq(xmm2, qword[A1 + LDA * 2 - 0x80]);
-        movq(xmm3, qword[A1 + LDA3 * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 + LDA * 2 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 + LDA3 * 1 - 0x80]);
         lea(A2, ptr[A1 + LDA * 4]);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -197,10 +197,10 @@ void jit_avx2_u8_copy_at_kern::generate() {
         punpckhqdq(xmm1, xmm2);
         movdqu(xword[B - 0x80], xmm0);
         movdqu(xword[B - 0x40], xmm1);
-        movq(xmm0, qword[A2 - 0x80]);
-        movq(xmm1, qword[A2 + LDA * 1 - 0x80]);
-        movq(xmm2, qword[A2 + LDA * 2 - 0x80]);
-        movq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A2 - 0x80]);
+        uni_vmovq(xmm1, qword[A2 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A2 + LDA * 2 - 0x80]);
+        uni_vmovq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
         lea(A2, ptr[A2 + LDA * 4]);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -209,10 +209,10 @@ void jit_avx2_u8_copy_at_kern::generate() {
         punpckhqdq(xmm1, xmm2);
         movdqu(xword[B - 0x70], xmm0);
         movdqu(xword[B - 0x30], xmm1);
-        movq(xmm0, qword[A2 - 0x80]);
-        movq(xmm1, qword[A2 + LDA * 1 - 0x80]);
-        movq(xmm2, qword[A2 + LDA * 2 - 0x80]);
-        movq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A2 - 0x80]);
+        uni_vmovq(xmm1, qword[A2 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A2 + LDA * 2 - 0x80]);
+        uni_vmovq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
         lea(A2, ptr[A2 + LDA * 4]);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -221,10 +221,10 @@ void jit_avx2_u8_copy_at_kern::generate() {
         punpckhqdq(xmm1, xmm2);
         movdqu(xword[B - 0x60], xmm0);
         movdqu(xword[B - 0x20], xmm1);
-        movq(xmm0, qword[A2 - 0x80]);
-        movq(xmm1, qword[A2 + LDA * 1 - 0x80]);
-        movq(xmm2, qword[A2 + LDA * 2 - 0x80]);
-        movq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A2 - 0x80]);
+        uni_vmovq(xmm1, qword[A2 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A2 + LDA * 2 - 0x80]);
+        uni_vmovq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
         movdqa(xmm1, xmm0);
@@ -437,10 +437,10 @@ void jit_avx2_u8_copy_at_kern::generate() {
         L(labels[10]);
         test(M, 0x8);
         jle(labels[11], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
-        movq(xmm1, qword[A1 + LDA * 1 - 0x80]);
-        movq(xmm2, qword[A1 + LDA * 2 - 0x80]);
-        movq(xmm3, qword[A1 + LDA3 * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 + LDA * 2 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 + LDA3 * 1 - 0x80]);
         sub(A1, -8);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -449,10 +449,10 @@ void jit_avx2_u8_copy_at_kern::generate() {
         punpckhqdq(xmm1, xmm2);
         movdqu(xword[B - 0x80], xmm0);
         movdqu(xword[B - 0x60], xmm1);
-        movq(xmm0, qword[A2 - 0x80]);
-        movq(xmm1, qword[A2 + LDA * 1 - 0x80]);
-        movq(xmm2, qword[A2 + LDA * 2 - 0x80]);
-        movq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A2 - 0x80]);
+        uni_vmovq(xmm1, qword[A2 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A2 + LDA * 2 - 0x80]);
+        uni_vmovq(xmm3, qword[A2 + LDA3 * 1 - 0x80]);
         sub(A2, -8);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -532,7 +532,7 @@ void jit_avx2_u8_copy_at_kern::generate() {
         pinsrb(xmm0, eax, 0x6);
         mov(al, byte[A2 + LDA3 * 1 - 0x80]);
         pinsrb(xmm0, eax, 0x7);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -588,11 +588,11 @@ void jit_avx2_u8_copy_at_kern::generate() {
         L(labels[18]);
         test(M, 0x8);
         jle(labels[19], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
-        movq(xmm1, qword[A1 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 + LDA * 1 - 0x80]);
         sub(A1, -8);
-        movq(xmm2, qword[A2 - 0x80]);
-        movq(xmm3, qword[A2 + LDA * 1 - 0x80]);
+        uni_vmovq(xmm2, qword[A2 - 0x80]);
+        uni_vmovq(xmm3, qword[A2 + LDA * 1 - 0x80]);
         sub(A2, -8);
         punpckldq(xmm0, xmm1);
         punpckldq(xmm2, xmm3);
@@ -633,7 +633,7 @@ void jit_avx2_u8_copy_at_kern::generate() {
         mov(ax, word[A2 + LDA * 1 - 0x80]);
         sub(A2, -2);
         pinsrw(xmm0, eax, 0x3);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -691,9 +691,9 @@ void jit_avx2_u8_copy_at_kern::generate() {
         L(labels[26]);
         test(M, 0x8);
         jle(labels[27], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         sub(A1, -8);
-        movq(xmm1, qword[A2 - 0x80]);
+        uni_vmovq(xmm1, qword[A2 - 0x80]);
         sub(A2, -8);
         punpckldq(xmm0, xmm1);
         movdqu(xword[B - 0x80], xmm0);
@@ -708,7 +708,7 @@ void jit_avx2_u8_copy_at_kern::generate() {
         movd(xmm1, dword[A2 - 0x80]);
         sub(A2, -4);
         punpckldq(xmm0, xmm1);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -766,9 +766,9 @@ void jit_avx2_u8_copy_at_kern::generate() {
         L(labels[34]);
         test(M, 0x8);
         jle(labels[35], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         sub(A1, -8);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 

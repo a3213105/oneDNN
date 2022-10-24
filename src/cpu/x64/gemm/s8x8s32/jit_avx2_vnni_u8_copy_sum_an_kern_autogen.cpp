@@ -100,9 +100,9 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
 
         L(labels[9]);
         movdqu(xmm0, xword[A1 - 0x80]);
-        movq(xmm4, qword[A1 - 0x70]);
+        uni_vmovq(xmm4, qword[A1 - 0x70]);
         add(A1, LDA);
-        movq(xmm6, qword[A1 - 0x70]);
+        uni_vmovq(xmm6, qword[A1 - 0x70]);
         punpcklbw(xmm4, xmm6);
         movdqu(xmm6, xword[A1 - 0x80]);
         add(A1, LDA);
@@ -110,9 +110,9 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         punpcklbw(xmm0, xmm6);
         punpckhbw(xmm2, xmm6);
         movdqu(xmm1, xword[A1 - 0x80]);
-        movq(xmm5, qword[A1 - 0x70]);
+        uni_vmovq(xmm5, qword[A1 - 0x70]);
         add(A1, LDA);
-        movq(xmm6, qword[A1 - 0x70]);
+        uni_vmovq(xmm6, qword[A1 - 0x70]);
         punpcklbw(xmm5, xmm6);
         movdqu(xmm6, xword[A1 - 0x80]);
         add(A1, LDA);
@@ -185,10 +185,10 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         test(M, 0x2);
         jle(labels[2], T_NEAR);
         movdqu(xmm0, xword[A1 - 0x80]);
-        movq(xmm1, qword[A1 - 0x70]);
+        uni_vmovq(xmm1, qword[A1 - 0x70]);
         add(A1, LDA);
         movdqu(xmm2, xword[A1 - 0x80]);
-        movq(xmm3, qword[A1 - 0x70]);
+        uni_vmovq(xmm3, qword[A1 - 0x70]);
         add(A1, LDA);
         movdqa(xmm4, xmm0);
         punpcklbw(xmm0, xmm2);
@@ -231,7 +231,7 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         test(M, 0x1);
         jle(labels[3], T_NEAR);
         movdqu(xmm0, xword[A1 - 0x80]);
-        movq(xmm1, qword[A1 - 0x70]);
+        uni_vmovq(xmm1, qword[A1 - 0x70]);
         add(A1, LDA);
         pmovsxbd(xmm5, xmm0);
         paddd(xmm8, xmm5);
@@ -250,7 +250,7 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         pmovsxbd(xmm6, xmm6);
         paddd(xmm12, xmm5);
         paddd(xmm13, xmm6);
-        movq(qword[B - 0x70], xmm1);
+        uni_vmovq(qword[B - 0x70], xmm1);
         sub(B, -24);
         align(4);
 
@@ -424,13 +424,13 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         align(4);
 
         L(labels[13]);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm1, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm2, qword[A1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm3, qword[A1 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         punpcklbw(xmm2, xmm3);
@@ -453,13 +453,13 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         paddd(xmm9, xmm5);
         movdqu(xword[B - 0x80], xmm0);
         movdqu(xword[B - 0x70], xmm1);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm1, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm2, qword[A1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm3, qword[A1 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         punpcklbw(xmm2, xmm3);
@@ -490,13 +490,13 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         L(labels[14]);
         test(M, 0x4);
         jle(labels[15], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm1, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm2, qword[A1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm3, qword[A1 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         punpcklbw(xmm2, xmm3);
@@ -525,9 +525,9 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         L(labels[15]);
         test(M, 0x2);
         jle(labels[16], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm1, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         pmovsxbw(xmm5, xmm0);
@@ -546,14 +546,14 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         L(labels[16]);
         test(M, 0x1);
         jle(labels[17], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
         pmovsxbd(xmm5, xmm0);
         pshufd(xmm6, xmm0, 0x55);
         pmovsxbd(xmm6, xmm6);
         paddd(xmm8, xmm5);
         paddd(xmm9, xmm6);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -662,7 +662,7 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         phaddw(xmm5, xmm5);
         pmovsxwd(xmm5, xmm5);
         paddd(xmm7, xmm5);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -769,7 +769,7 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         phaddw(xmm5, xmm5);
         pmovsxwd(xmm5, xmm5);
         paddd(xmm7, xmm5);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -804,7 +804,7 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
 
         L(labels[31]);
         mov(A1, qword[ARG_BIAS]);
-        movq(qword[A1], xmm7);
+        uni_vmovq(qword[A1], xmm7);
         add(qword[ARG_BIAS], 0x8);
         sub(N, 0x2);
         cmp(N, 0x2);
@@ -856,7 +856,7 @@ void jit_avx2_vnni_u8_copy_sum_an_kern::generate() {
         phaddw(xmm5, xmm5);
         pmovsxwd(xmm5, xmm5);
         paddd(xmm7, xmm5);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         dec(LDA3);
         jg(labels[34], T_NEAR);

@@ -586,11 +586,11 @@ void jit_uni_lrn_fwd_kernel_t<sse41, dnnl::impl::data_type::f32>::generate(
         this->mov(scratch_, this->ptr[this->param1 + 16]);
     this->sub(t, 64);
     this->mov(this->imm_addr64_, float2int(this->alpha_));
-    this->movq(xalpha_, this->imm_addr64_);
+    this->uni_vmovq(xalpha_, this->imm_addr64_);
     this->shufps(xalpha_, xalpha_, 0);
 
     this->mov(this->imm_addr64_, float2int(this->k_));
-    this->movq(xk_, this->imm_addr64_);
+    this->uni_vmovq(xk_, this->imm_addr64_);
     this->shufps(xk_, xk_, 0);
 
     if (J.version == -1) {
@@ -717,11 +717,11 @@ void jit_uni_lrn_fwd_kernel_t<isa, d_type>::generate(const nhwc_across_t &J) {
     if (pk_ != prop_kind::forward_inference)
         this->mov(scratch_, this->ptr[this->param1 + 16]);
     this->mov(this->imm_addr64_, float2int(this->alpha_));
-    this->movq(xalpha_, this->imm_addr64_);
+    this->uni_vmovq(xalpha_, this->imm_addr64_);
     this->vbroadcastss(valpha_, xalpha_);
 
     this->mov(this->imm_addr64_, float2int(this->k_));
-    this->movq(xk_, this->imm_addr64_);
+    this->uni_vmovq(xk_, this->imm_addr64_);
     this->vbroadcastss(yk_, xk_);
 
     this->vxorps(ysum, ysum, ysum);
@@ -849,11 +849,11 @@ void jit_uni_lrn_fwd_kernel_t<sse41, dnnl::impl::data_type::f32>::generate(
     if (pk_ != prop_kind::forward_inference)
         mov(scratch_, this->ptr[this->param1 + 16]);
     this->mov(this->imm_addr64_, float2int(this->alpha_));
-    this->movq(xalpha_, this->imm_addr64_);
+    this->uni_vmovq(xalpha_, this->imm_addr64_);
     this->shufps(xalpha_, xalpha_, 0);
 
     this->mov(this->imm_addr64_, float2int(this->k_));
-    this->movq(xk_, this->imm_addr64_);
+    this->uni_vmovq(xk_, this->imm_addr64_);
     this->shufps(xk_, xk_, 0);
 
     this->mov(store_addr_, reinterpret_cast<size_t>(&store[0]));
@@ -1387,11 +1387,11 @@ void jit_uni_lrn_fwd_kernel_t<sse41, dnnl::impl::data_type::f32>::generate(
     this->and_(store_addr_, -15);
 
     this->mov(this->imm_addr64_, float2int(this->alpha_));
-    this->movq(xalpha_, this->imm_addr64_);
+    this->uni_vmovq(xalpha_, this->imm_addr64_);
     this->shufps(xalpha_, xalpha_, 0);
 
     this->mov(this->imm_addr64_, float2int(this->k_));
-    this->movq(xk_, this->imm_addr64_);
+    this->uni_vmovq(xk_, this->imm_addr64_);
     this->shufps(xk_, xk_, 0);
 
     // put alpha_ and k_ into store (free up regs)

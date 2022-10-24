@@ -163,7 +163,7 @@ void jit_avx_u8_copy_sum_bt_kern::generate() {
         phaddw(xmm5, xmm5);
         pmovzxwd(xmm5, xmm5);
         paddd(xmm7, xmm5);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -198,7 +198,7 @@ void jit_avx_u8_copy_sum_bt_kern::generate() {
 
         L(labels[2]);
         mov(A1, qword[ARG_BIAS]);
-        movq(qword[A1], xmm7);
+        uni_vmovq(qword[A1], xmm7);
         add(qword[ARG_BIAS], 0x8);
         sub(N, 0x2);
         cmp(N, 0x2);
@@ -250,7 +250,7 @@ void jit_avx_u8_copy_sum_bt_kern::generate() {
         phaddw(xmm5, xmm5);
         pmovzxwd(xmm5, xmm5);
         paddd(xmm7, xmm5);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         dec(LDA3);
         jg(labels[6], T_NEAR);

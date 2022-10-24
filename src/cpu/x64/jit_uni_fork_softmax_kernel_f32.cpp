@@ -621,7 +621,7 @@ void jit_uni_fork_softmax_kernel_f32<isa>::generate() {
         mov(reg_channels, ptr[abi_param1 + GET_OFF(channels)]);
 
         mov(reg_min, float2int(-FLT_MAX));
-        movq(xmm_float_min, reg_min);
+        uni_vmovq(xmm_float_min, reg_min);
 
         mov(imm_addr64, jit_uni_fork_softmax_kernel_f32<isa>::l_table);
         uni_vmovups(vmm_one, ptr[imm_addr64 + 0 * vlen]);
@@ -690,7 +690,7 @@ void jit_uni_fork_softmax_kernel_f32<isa>::generate_dense() {
     mov(reg_work_amount, ptr[abi_param1 + GET_OFF(work)]);
 
     mov(reg_min, float2int(-FLT_MAX));
-    movq(xmm_float_min, reg_min);
+    uni_vmovq(xmm_float_min, reg_min);
 
     mov(imm_addr64, jit_uni_fork_softmax_kernel_f32<isa>::l_table);
     uni_vmovups(vmm_one, ptr[imm_addr64 + 0 * vlen]);

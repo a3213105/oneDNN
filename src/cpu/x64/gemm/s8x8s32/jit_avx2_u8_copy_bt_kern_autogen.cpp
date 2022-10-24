@@ -145,7 +145,7 @@ void jit_avx2_u8_copy_bt_kern::generate() {
         movd(xmm1, dword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -232,7 +232,7 @@ void jit_avx2_u8_copy_bt_kern::generate() {
         punpcklbw(xmm0, xmm1);
         punpcklbw(xmm2, xmm3);
         punpcklwd(xmm0, xmm2);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -302,7 +302,7 @@ void jit_avx2_u8_copy_bt_kern::generate() {
         mov(al, byte[A1 - 0x80]);
         add(A1, LDA);
         pinsrb(xmm0, eax, 0x7);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         dec(LDA3);
         jg(labels[12], T_NEAR);

@@ -106,13 +106,13 @@ void jit_avx512_core_u8_copy_bt_kern::generate() {
         align(4);
 
         L(labels[14]);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm1, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm2, qword[A1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm3, qword[A1 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         punpcklbw(xmm2, xmm3);
@@ -123,13 +123,13 @@ void jit_avx512_core_u8_copy_bt_kern::generate() {
         maybe_perform_s8_shift_xmm(xmm1);
         movdqu(xword[B - 0x80], xmm0);
         movdqu(xword[B - 0x70], xmm1);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm1, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm2, qword[A1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm3, qword[A1 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         punpcklbw(xmm2, xmm3);
@@ -148,13 +148,13 @@ void jit_avx512_core_u8_copy_bt_kern::generate() {
         L(labels[27]);
         test(M, 0x4);
         jle(labels[0], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm1, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm2, qword[A1 - 0x80]);
+        uni_vmovq(xmm2, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm3, qword[A1 - 0x80]);
+        uni_vmovq(xmm3, qword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         punpcklbw(xmm2, xmm3);
@@ -171,9 +171,9 @@ void jit_avx512_core_u8_copy_bt_kern::generate() {
         L(labels[0]);
         test(M, 0x2);
         jle(labels[1], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
-        movq(xmm1, qword[A1 - 0x80]);
+        uni_vmovq(xmm1, qword[A1 - 0x80]);
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         maybe_perform_s8_shift_xmm(xmm0);
@@ -184,10 +184,10 @@ void jit_avx512_core_u8_copy_bt_kern::generate() {
         L(labels[1]);
         test(M, 0x1);
         jle(labels[2], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         add(A1, LDA);
         maybe_perform_s8_shift_xmm(xmm0);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -270,7 +270,7 @@ void jit_avx512_core_u8_copy_bt_kern::generate() {
         add(A1, LDA);
         punpcklbw(xmm0, xmm1);
         maybe_perform_s8_shift_xmm(xmm0);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -360,7 +360,7 @@ void jit_avx512_core_u8_copy_bt_kern::generate() {
         punpcklbw(xmm2, xmm3);
         punpcklwd(xmm0, xmm2);
         maybe_perform_s8_shift_xmm(xmm0);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -433,7 +433,7 @@ void jit_avx512_core_u8_copy_bt_kern::generate() {
         add(A1, LDA);
         pinsrb(xmm0, eax, 0x7);
         maybe_perform_s8_shift_xmm(xmm0);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         dec(LDA3);
         jg(labels[21], T_NEAR);

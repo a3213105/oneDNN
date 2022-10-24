@@ -2038,7 +2038,7 @@ struct xbyak_gemm_t : public jit_generator {
         }
 
         if (isTransA && is_avx2) {
-            movq(xmm0, LDA);
+            vmovq(xmm0, LDA);
             vpbroadcastq(ymm1, xmm0);
             vinsertf128(ymm0, ymm0, xmm0, 1);
             vpermilpd(ymm0, ymm0, 5);

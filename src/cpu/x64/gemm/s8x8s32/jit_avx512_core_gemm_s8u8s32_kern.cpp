@@ -462,7 +462,7 @@ void jit_avx512_core_gemm_s8u8s32_kern::generate() {
 
     if (!vnni_) {
         mov(rax, 1);
-        movq(make_xmm(ones_), rax);
+        uni_vmovq(make_xmm(ones_), rax);
         vpbroadcastw(ones_, make_xmm(ones_));
     }
 

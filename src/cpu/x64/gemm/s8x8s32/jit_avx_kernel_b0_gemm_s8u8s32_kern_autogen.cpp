@@ -108,7 +108,7 @@ void jit_avx_kernel_b0_gemm_s8u8s32_kern::generate() {
         vxorps(xmm14, xmm14, xmm14);
         vxorps(xmm15, xmm15, xmm15);
         mov(H, 0x10001);
-        movq(xmm7, H);
+        uni_vmovq(xmm7, H);
         vpshufd(xmm7, xmm7, 0x0);
         mov(J, M);
         cmp(J, 0x10);

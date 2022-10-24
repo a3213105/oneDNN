@@ -161,7 +161,7 @@ void jit_uni_dw_conv_row_f32<isa>::cvt2ps(data_type_t type_in, Vmm vmm_in, const
         case data_type::s32:
             if (scalar_load) {
                 mov(reg_tmp_32, op);
-                movq(xmm_in, reg_tmp_64);
+                uni_vmovq(xmm_in, reg_tmp_64);
             } else {
                 uni_vmovups(vmm_in, op);
             }
@@ -169,7 +169,7 @@ void jit_uni_dw_conv_row_f32<isa>::cvt2ps(data_type_t type_in, Vmm vmm_in, const
         case data_type::s8:
             if (scalar_load) {
                 movsx(reg_tmp_32, op);
-                movq(xmm_in, reg_tmp_64);
+                uni_vmovq(xmm_in, reg_tmp_64);
             } else {
                 uni_vpmovsxbd(vmm_in, op);
             }
@@ -177,7 +177,7 @@ void jit_uni_dw_conv_row_f32<isa>::cvt2ps(data_type_t type_in, Vmm vmm_in, const
         case data_type::u8:
             if (scalar_load) {
                 movzx(reg_tmp_32, op);
-                movq(xmm_in, reg_tmp_64);
+                uni_vmovq(xmm_in, reg_tmp_64);
             } else {
                 uni_vpmovzxbd(vmm_in, op);
             }
@@ -320,7 +320,7 @@ void jit_uni_dw_conv_row_f32<isa>::store_dst_typed(const Xbyak::Address &op, Vmm
         case data_type::f32:
         case data_type::s32:
             if (scalar_store) {
-                movq(reg_tmp_64, xmm_dst);
+                uni_vmovq(reg_tmp_64, xmm_dst);
                 mov(op, reg_tmp_32);
             } else {
                 uni_vmovups(op, vmm_dst);
@@ -335,7 +335,7 @@ void jit_uni_dw_conv_row_f32<isa>::store_dst_typed(const Xbyak::Address &op, Vmm
             uni_vpacksswb(vmm_dst, vmm_dst, vmm_dst);
 
             if (scalar_store) {
-                movq(reg_tmp_64, xmm_dst);
+                uni_vmovq(reg_tmp_64, xmm_dst);
                 mov(op, reg_tmp_8);
             } else {
                 if (isa != sse41)
@@ -354,7 +354,7 @@ void jit_uni_dw_conv_row_f32<isa>::store_dst_typed(const Xbyak::Address &op, Vmm
             uni_vpackuswb(vmm_dst, vmm_dst, vmm_dst);
 
             if (scalar_store) {
-                movq(reg_tmp_64, xmm_dst);
+                uni_vmovq(reg_tmp_64, xmm_dst);
                 mov(op, reg_tmp_8);
             } else {
                 if (isa != sse41)

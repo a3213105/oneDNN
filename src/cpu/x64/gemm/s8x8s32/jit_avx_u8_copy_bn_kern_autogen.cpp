@@ -109,9 +109,9 @@ void jit_avx_u8_copy_bn_kern::generate() {
         L(labels[12]);
         test(M, 0x8);
         jle(labels[13], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         sub(A1, -8);
-        movq(xmm1, qword[A2 - 0x80]);
+        uni_vmovq(xmm1, qword[A2 - 0x80]);
         sub(A2, -8);
         punpckldq(xmm0, xmm1);
         movdqu(xword[B - 0x80], xmm0);
@@ -126,7 +126,7 @@ void jit_avx_u8_copy_bn_kern::generate() {
         movd(xmm1, dword[A2 - 0x80]);
         sub(A2, -4);
         punpckldq(xmm0, xmm1);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
@@ -184,9 +184,9 @@ void jit_avx_u8_copy_bn_kern::generate() {
         L(labels[4]);
         test(M, 0x8);
         jle(labels[5], T_NEAR);
-        movq(xmm0, qword[A1 - 0x80]);
+        uni_vmovq(xmm0, qword[A1 - 0x80]);
         sub(A1, -8);
-        movq(qword[B - 0x80], xmm0);
+        uni_vmovq(qword[B - 0x80], xmm0);
         sub(B, -8);
         align(4);
 
