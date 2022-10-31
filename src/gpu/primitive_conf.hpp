@@ -44,6 +44,18 @@ bool memory_desc_ndims_ok(const T *first, const Rest *... rest) {
     return memory_desc_ndims_ok(first) || memory_desc_ndims_ok(rest...);
 }
 
+inline dim_t get_attr_oscales_count(int mask, const memory_desc_wrapper &md) {
+    dim_t count = 1;
+    if (mask == 0) return count;
+
+    for (int d = 0; d < md.ndims(); d++) {
+        const int dim_mask = 1 << d;
+        if (dim_mask & mask) count *= md.dims()[d];
+    }
+
+    return count;
+}
+
 struct memory_desc_info_t {
     // Max levels of blocking
     static const int max_nlevels = 3;
@@ -362,6 +374,8 @@ struct pool_conf_t {
     compute::dispatch_t dispatch;
     int sub_group_size;
     int global_pool_spatial_chunk;
+    int num_batches = 1;
+    int mb_block_size = 16;
 
     attr_info_t attr_info;
     memory_desc_info_t src_md_info;
@@ -620,7 +634,7 @@ struct reduction_conf_t {
     data_type_t src_type, dst_type;
     alg_kind_t alg;
     compute::dispatch_t dispatch;
-    compute::dispatch_t finilize_dispatch;
+    compute::dispatch_t finalize_dispatch;
     memory_desc_info_t src_md_info, dst_md_info;
     offsets_t off;
     attr_info_t attr_info;

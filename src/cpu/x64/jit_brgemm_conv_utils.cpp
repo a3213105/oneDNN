@@ -80,8 +80,8 @@ bool post_ops_ok(jit_brgemm_conv_conf_t &jcp, primitive_attr_t &attr,
             {sum, eltwise, binary}, post_ops, &dst_d,
             false /*sum_at_pos_0_only*/, false /*sum_requires_scale_one*/,
             false /*sum_requires_zp_zero*/,
-            {broadcasting_strategy_t::per_oc,
-                    broadcasting_strategy_t::scalar}));
+            {broadcasting_strategy_t::per_oc, broadcasting_strategy_t::scalar,
+                    broadcasting_strategy_t::no_broadcast}));
 }
 
 bool is_groups_ok(jit_brgemm_conv_conf_t &jcp) {
@@ -1629,9 +1629,9 @@ status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
     jcp.isa = isa;
 
     if (is_amx(isa)) {
-        int max_palette = amx::get_max_palette();
-        if (amx::get_max_tiles(max_palette) != 8
-                || amx::get_max_rows(max_palette) != 16)
+        const int target_palette = amx::get_target_palette();
+        if (amx::get_max_tiles(target_palette) != 8
+                || amx::get_max_rows(target_palette) != 16)
             return status::unimplemented;
     }
 
@@ -1853,9 +1853,8 @@ status_t init_conf(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
                 && IMPLICATION(with_groups, is_groups_ok(jcp)))
             return status::unimplemented;
 
-        if (jcp.f_pad >= jcp.kd || jcp.t_pad >= jcp.kh || jcp.r_pad >= jcp.kw)
-            return status::unimplemented;
-        if (jcp.dilate_d > 0 || jcp.dilate_h > 0 || jcp.dilate_w > 0)
+        if (jcp.f_pad >= jcp.ext_kd || jcp.t_pad >= jcp.ext_kh
+                || jcp.r_pad >= jcp.ext_kw)
             return status::unimplemented;
     }
 
@@ -2065,6 +2064,19 @@ status_t init_conf(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
                 |= memory_extra_flags::compensation_conv_asymmetric_src;
         weights_md.extra.asymm_compensation_mask = with_groups ? 0x3 : 0x1;
     }
+
+    // disables the shape with small ic but large spatial for int8 conv
+    const auto is_ok_large_spatial
+            = IMPLICATION(!is_amx(jcp.isa) && jcp.ic <= 128,
+                      jcp.od * jcp.oh < 100
+                              || jcp.ic * jcp.oc_block * jcp.ow_block > 8192)
+            && IMPLICATION(is_amx(jcp.isa) && jcp.ic <= 16,
+                    jcp.ow < 2048
+                            || div_up(jcp.ow_block, selected_ur) * jcp.kd
+                                            * jcp.kh * jcp.kw
+                                    > 8192);
+    if (one_of(jcp.src_dt, u8, s8) && !is_ok_large_spatial)
+        return status::unimplemented;
 
     // For padding shapes, we calculate the comp along with the computation
     // inside brgemm kernel when output size is small to get optimal perf
@@ -2336,10 +2348,11 @@ void balance_bwd_w(jit_brgemm_conv_conf_t &jcp) {
 
         const auto wei_ks = jcp.kh * jcp.kw * jcp.kd;
 
-        dim_t src_size = (dim_t)jcp.mb * jcp.ic * jcp.id * jcp.ih * jcp.tr_iw
-                * src_type_size;
-        dim_t dst_size = (dim_t)jcp.mb * jcp.oc * jcp.od * jcp.oh * jcp.tr_ow
-                * src_type_size;
+        const auto src_spatial = (dim_t)jcp.mb * jcp.id * jcp.ih * jcp.tr_iw;
+        const auto dst_spatial = (dim_t)jcp.mb * jcp.od * jcp.oh * jcp.tr_ow;
+
+        dim_t src_size = src_spatial * jcp.ic * src_type_size;
+        dim_t dst_size = dst_spatial * jcp.oc * src_type_size;
         dim_t wei_size = (dim_t)jcp.oc * jcp.ic * wei_ks * wei_type_size;
 
         float wei_compensation_scale = 0.5f * (dst_size + src_size) / wei_size;
@@ -2365,8 +2378,8 @@ void balance_bwd_w(jit_brgemm_conv_conf_t &jcp) {
         const auto nb_oc_job = jcp.oc_block * jcp.nb_oc_blocking;
         const auto nb_ic_job = jcp.ic_block * jcp.nb_ic_blocking;
 
-        const auto src_chunk = jcp.mb * jcp.id * jcp.ih * jcp.tr_iw / os_chunks;
-        const auto dst_chunk = jcp.mb * jcp.od * jcp.oh * jcp.tr_ow / os_chunks;
+        const auto src_chunk = src_spatial / os_chunks;
+        const auto dst_chunk = dst_spatial / os_chunks;
 
         const auto thr_g = div_up(jcp.ngroups, nthr_g);
         const auto thr_ic_b = div_up(ic_chunks, nthr_ic_b);
@@ -2437,9 +2450,9 @@ void balance_bwd_w(jit_brgemm_conv_conf_t &jcp) {
     balance(nthr, nthr_mb, nthr_g, nthr_oc_b, nthr_ic_b);
 
     // empiric balancing for some shapes
-    bool neat_1x1 = (jcp.id == 1 && jcp.kh == 1 && jcp.kw == 1
-            && jcp.ngroups == 1 && jcp.stride_h == 1);
-    if (neat_1x1 && jcp.nthr >= 56) {
+    bool neat_1x1
+            = everyone_is(1, jcp.id, jcp.kh, jcp.kw, jcp.ngroups, jcp.stride_h);
+    if (neat_1x1 && jcp.nthr >= 56 && jcp.mb >= jcp.nthr) {
         const bool more_oc = (jcp.ic < jcp.oc);
         if (jcp.ih * jcp.iw >= 56 * 56 && jcp.ic >= 64 && jcp.oc >= 64) {
             nthr_mb = 56;
@@ -2457,6 +2470,7 @@ void balance_bwd_w(jit_brgemm_conv_conf_t &jcp) {
             nthr_oc_b = more_oc ? 14 : 1;
         }
         nthr_ic_b = jcp.nthr / (nthr_mb * nthr_oc_b);
+        nthr = nthr_mb * nthr_g * nthr_oc_b * nthr_ic_b;
     }
 
     jcp.nthr = nthr;
@@ -2498,9 +2512,9 @@ status_t init_conf_bwd_w(jit_brgemm_conv_conf_t &jcp,
     // Process some 1x1 convolutions with small iw as 1d (h=1, w = h*w)
     // convolutions to make brgemm K dimension bigger for better utilization of
     // AMX tiles
-    bool neat_1x1_2d = (jcp.kh == 1 && jcp.kw == 1 && jcp.stride_h == 1
-            && jcp.stride_w == 1 && jcp.t_pad == 0 && jcp.b_pad == 0
-            && jcp.l_pad == 0 && jcp.r_pad == 0);
+    bool neat_1x1_2d = (everyone_is(
+                                1, jcp.kh, jcp.kw, jcp.stride_h, jcp.stride_w)
+            && everyone_is(0, jcp.t_pad, jcp.b_pad, jcp.l_pad, jcp.r_pad));
     bool make_1d = neat_1x1_2d && jcp.iw <= 28;
     if (make_1d) {
         jcp.iw *= jcp.ih;
@@ -2679,12 +2693,18 @@ status_t init_conf_bwd_w(jit_brgemm_conv_conf_t &jcp,
         jcp.K = jcp.tr_ow;
     }
 
-    jcp.tr_ocb_chunk = (jcp.oh * jcp.ow > 38 * 38) ? true : false;
-    jcp.tr_icb_chunk = false;
-
     jcp.K_tail = 0;
 
     balance_bwd_w(jcp);
+
+    // for convolutions with big spatial: transpose only chunk
+    // (oc_block * nb_oc_blocking) of diff_dst on each iteration by oc blocks
+    // for better cache utilization
+    // the equal number of channel blocks per thread is required to use this
+    // approach to avoid hangs
+    bool tr_ocb_chunk_allowed = (jcp.nb_oc % jcp.nthr_oc_b == 0);
+    jcp.tr_ocb_chunk = tr_ocb_chunk_allowed && (jcp.oh * jcp.ow > 38 * 38);
+    jcp.tr_icb_chunk = false;
 
     const int irow_size = jcp.src_dsz * jcp.tr_iw * jcp.ic_block
             * div_up(jcp.nb_ic, jcp.nthr_ic_b)

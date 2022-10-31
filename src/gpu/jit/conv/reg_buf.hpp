@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021 Intel Corporation
+* Copyright 2021-2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -65,7 +65,7 @@ public:
     int regs() const { return blocks() * block_regs(); }
 
     void set_grf_permutation(const grf_permutation_t &grf_perm) {
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(GEN_CONV_DEBUG)
         // Check that it's a valid permutation.
         std::unordered_set<int> seen;
         for (int i = 0; i < regs(); i++) {
@@ -118,6 +118,9 @@ public:
     reg_buf_data_t(const reg_buf_t &reg_buf)
         : reg_buf_(std::make_shared<reg_buf_t>(reg_buf))
         , rd_(ngen::GRF(reg_buf_->base(0))) {}
+
+    reg_buf_data_t(const reg_buf_t &reg_buf, const ngen::RegData &rd)
+        : reg_buf_(std::make_shared<reg_buf_t>(reg_buf)), rd_(rd) {}
 
     reg_buf_data_t(ngen::HW hw, const ngen::Subregister &sub)
         : reg_buf_(std::make_shared<reg_buf_t>(

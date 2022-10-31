@@ -48,7 +48,7 @@ void init_kernel_datatype(
         brgemm_t *brg, impl::data_type_t dt_a, impl::data_type_t dt_b) {
     assert(dt_a != data_type::undef && dt_b != data_type::undef);
     brg->is_int8 = utils::one_of(dt_a, data_type::u8, data_type::s8)
-            && (dt_b == data_type::s8);
+            && utils::one_of(dt_b, data_type::u8, data_type::s8);
     brg->is_bf16 = (dt_a == data_type::bf16) && (dt_b == data_type::bf16);
     brg->is_f32 = (dt_a == data_type::f32) && (dt_b == data_type::f32);
     assert(brg->is_int8 || brg->is_bf16 || brg->is_f32);
@@ -475,7 +475,7 @@ void init_brgemm_conf(brgemm_t *brg, cpu_isa_t isa, brgemm_batch_kind_t type,
     brg->ld_step = brg->rd_step = 4 / brg->typesize_A;
 }
 
-void init_brdgemm_conf(brgemm_t *brg, brgemm_batch_kind_t type,
+void init_brdgmm_conf(brgemm_t *brg, brgemm_batch_kind_t type,
         impl::data_type_t dt_a, impl::data_type_t dt_b, brgemm_layout_t layout,
         float alpha, float beta, dim_t LDA, dim_t LDC, dim_t M, dim_t N,
         const brgemm_strides_t *strides) {

@@ -23,6 +23,7 @@
 
 #include "oneapi/dnnl/dnnl.h"
 
+#include "tests/test_isa_common.hpp"
 #include "utils/parallel.hpp"
 
 #include "dnnl_common.hpp"
@@ -730,6 +731,16 @@ void skip_unimplemented_prb(const prb_t *prb_, res_t *res) {
     }
 #endif
 
+#if DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE
+    static auto isa = dnnl_get_effective_cpu_isa();
+    const bool is_f16_not_ok = prb.cfg[SRC_LAYER].dt == dnnl_f16
+            && dnnl::is_superset(isa, dnnl_cpu_isa_avx512_core_fp16);
+    if (is_f16_not_ok) {
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
+        return;
+    }
+#endif
+
     // int8 weights reorder does not support non trivial strides;
     // only LSTM and GRU cell kinds support int8 so far;
     if (prb.is_int8()) {
@@ -867,8 +878,8 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
             [&, prb](const compare::compare_t::driver_check_func_args_t &args) {
                 // Limitation from current filling.
                 // TODO: find a better filling to get rid of this...
-                if ((prb->alg == LBR_GRU || prb->alg == LBR_AUGRU
-                            || prb->alg == VANILLA_RNN)
+                if ((prb->alg == VANILLA_GRU || prb->alg == LBR_AUGRU
+                            || prb->alg == VANILLA_RNN || prb->alg == LBR_GRU)
                         && prb->prop == dnnl_backward) {
                     return args.diff < args.trh;
                 }

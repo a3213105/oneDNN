@@ -1285,6 +1285,7 @@ const primitive_kind_t matmul = dnnl_matmul;
 const primitive_kind_t resampling = dnnl_resampling;
 const primitive_kind_t reduction = dnnl_reduction;
 const primitive_kind_t softmax_v2 = dnnl_softmax_v2;
+const primitive_kind_t layer_normalization_v2 = dnnl_layer_normalization_v2;
 const primitive_kind_t depthwise = dnnl_depthwise;
 const primitive_kind_t quantization = dnnl_quantization;
 const primitive_kind_t binarization = dnnl_binarization;
@@ -1341,6 +1342,7 @@ const query_t matmul_d = dnnl_query_matmul_d;
 const query_t resampling_d = dnnl_query_resampling_d;
 const query_t reduction_d = dnnl_query_reduction_d;
 const query_t softmax_v2_d = dnnl_query_softmax_v2_d;
+const query_t layer_normalization_v2_d = dnnl_query_layer_normalization_v2_d;
 
 const query_t some_md = dnnl_query_some_md;
 const query_t src_md = dnnl_query_src_md;
@@ -1357,6 +1359,7 @@ const query_t scratchpad_md = dnnl_query_scratchpad_md;
 // Internal only query kinds.
 const query_t internal_only_start = (query_t)(1 << 12);
 const query_t zero_pad_d = internal_only_start;
+const query_t preferred_gpu_threads_per_eu = (query_t)(internal_only_start + 1);
 } // namespace query
 
 using blocking_desc_t = dnnl_blocking_desc_t;
@@ -1382,6 +1385,7 @@ using matmul_desc_t = dnnl_matmul_desc_t;
 using resampling_desc_t = dnnl_resampling_desc_t;
 using reduction_desc_t = dnnl_reduction_desc_t;
 using softmax_v2_desc_t = dnnl_softmax_v2_desc_t;
+using layer_normalization_v2_desc_t = dnnl_layer_normalization_v2_desc_t;
 
 using rnn_direction_t = dnnl_rnn_direction_t;
 using rnn_desc_t = dnnl_rnn_desc_t;
@@ -1411,7 +1415,7 @@ struct op_desc_t {
         softmax_v2_desc_t softmax_v2;
         lrn_desc_t lrn;
         batch_normalization_desc_t batch_normalization;
-        layer_normalization_desc_t layer_normalization;
+        layer_normalization_v2_desc_t layer_normalization_v2;
         inner_product_desc_t inner_product;
         rnn_desc_t rnn;
         gemm_desc_t gemm;
@@ -1442,7 +1446,7 @@ struct op_desc_t {
     DECL_CTOR_AND_CONVERTERS(softmax_v2_desc_t);
     DECL_CTOR_AND_CONVERTERS(lrn_desc_t);
     DECL_CTOR_AND_CONVERTERS(batch_normalization_desc_t);
-    DECL_CTOR_AND_CONVERTERS(layer_normalization_desc_t);
+    DECL_CTOR_AND_CONVERTERS(layer_normalization_v2_desc_t);
     DECL_CTOR_AND_CONVERTERS(inner_product_desc_t);
     DECL_CTOR_AND_CONVERTERS(rnn_desc_t);
     DECL_CTOR_AND_CONVERTERS(gemm_desc_t);

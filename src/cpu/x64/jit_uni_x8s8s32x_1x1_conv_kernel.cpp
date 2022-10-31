@@ -710,8 +710,8 @@ status_t jit_uni_x8s8s32x_1x1_conv_kernel<isa>::init_conf(
     if (jcp.with_weights_zp)
         return status::unimplemented;
 
-    jcp.os = jcp.od * jcp.oh * jcp.ow;
-    jcp.is = jcp.id * jcp.ih * jcp.iw;
+    jcp.os = static_cast<dim_t>(jcp.od) * jcp.oh * jcp.ow;
+    jcp.is = static_cast<dim_t>(jcp.id) * jcp.ih * jcp.iw;
 
     const auto &post_ops = attr.post_ops_;
     const int dw_conv_ind = post_ops.find(primitive_kind::convolution);
@@ -817,7 +817,7 @@ status_t jit_uni_x8s8s32x_1x1_conv_kernel<isa>::init_conf(
             && (jcp.oh <= size_threshold && jcp.ow <= size_threshold)) {
         if (jcp.os <= SMALL_SPATIAL && jcp.oc * jcp.ic < L2_size)
             max_regs = min_regs = 3;
-        jcp.ur = nstl::min(max_regs, jcp.os);
+        jcp.ur = nstl::min<dim_t>(max_regs, jcp.os);
     } else {
         const int spatial = jcp.od * jcp.oh;
         jcp.ur = 1;
@@ -829,7 +829,7 @@ status_t jit_uni_x8s8s32x_1x1_conv_kernel<isa>::init_conf(
             }
         }
         if (jcp.ur == 1) {
-            jcp.ur = nstl::min(max_regs, jcp.os);
+            jcp.ur = nstl::min<dim_t>(max_regs, jcp.os);
             int os_tail = jcp.os % max_regs;
             for (int i = max_regs; i >= min_regs; i--) {
                 int i_tail = jcp.os % i;
@@ -902,7 +902,7 @@ status_t jit_uni_x8s8s32x_1x1_conv_kernel<isa>::init_conf(
     bcast_blocking = div_up(jcp.mb * jcp.ngroups * nb_bcast,
                              div_up(jcp.nthr, jcp.load_grp_count))
             * jcp.bcast_block;
-    bcast_blocking = nstl::min(jcp.bcast_dim, bcast_blocking);
+    bcast_blocking = nstl::min<dim_t>(jcp.bcast_dim, bcast_blocking);
     bcast_blocking = rnd_up(bcast_blocking, jcp.bcast_block);
 
     int space_for_bcast = (L2_capacity - /* kernel_size - */
@@ -972,7 +972,9 @@ void jit_uni_x8s8s32x_1x1_conv_kernel<isa>::init_scratchpad(
     using namespace dnnl::impl::memory_tracking::names;
 
     if (jcp.signed_input && (!jcp.has_vnni)) {
-        dim_t count = nstl::max<dim_t>(attr.output_scales_.count_, 8);
+        const int mask = attr.output_scales_.mask_;
+        const dim_t scales_count = mask == 0 ? 1 : jcp.oc * jcp.ngroups;
+        const dim_t count = nstl::max<dim_t>(scales_count, 8);
         scratchpad.book<float>(key_conv_adjusted_scales, count);
     }
 }

@@ -464,14 +464,10 @@ public:
                 if (rhs_layout.blocks().empty()) return true;
 
                 auto rhs0 = rhs_layout.blocks()[0];
-                int block_bytes = rhs0.block * rhs_layout.type().size();
                 // Innermost block must:
                 // - be across output channels
                 // - be dense
-                // - aligned to 32 bytes (for HWord loads)
-                if (rhs0.dim_idx != 1 || dim_t(rhs0.stride) != 1
-                        || block_bytes % 32 != 0)
-                    return false;
+                if (rhs0.dim_idx != 1 || dim_t(rhs0.stride) != 1) return false;
             }
         }
         return true;
@@ -492,10 +488,13 @@ public:
         if (is_bwd_d) return true;
         if (is_bwd_w) {
             bool ok = true;
-            ok &= (src_data_type == data_type::bf16
-                    || src_data_type == data_type::f32);
+            data_type_t default_acc_type = src_data_type == data_type::f64
+                    ? data_type::f64
+                    : data_type::f32;
+            ok &= utils::one_of(src_data_type, data_type::bf16, data_type::f32,
+                    data_type::f64);
             ok &= (dst_data_type == src_data_type);
-            ok &= utils::one_of(wei_data_type, src_data_type, data_type::f32);
+            ok &= utils::one_of(wei_data_type, src_data_type, default_acc_type);
 
             if (with_bias) {
                 ok &= utils::one_of(
@@ -521,7 +520,12 @@ public:
     bool is_int8_dst() const {
         return utils::one_of(dst_data_type, data_type::s8, data_type::u8);
     }
-    bool is_small_ic() const { return ic <= 8; }
+    bool is_small_ic() const {
+        return ic * (int)types::data_type_size(src_data_type) <= 16;
+    }
+    bool is_small_oc() const {
+        return oc * (int)types::data_type_size(dst_data_type) <= 16;
+    }
     bool is_dw_large_mb() const { return is_dw && mb >= 16; }
     bool is_mixed_int8() const {
         return utils::one_of(a_data_type, dnnl_f16, dnnl_f32)

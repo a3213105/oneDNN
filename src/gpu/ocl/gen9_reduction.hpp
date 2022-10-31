@@ -32,6 +32,21 @@ namespace impl {
 namespace gpu {
 namespace ocl {
 
+// Requirements for this implementation:
+// - only N and C can be blocked (NCx or nCx)
+// - C is blocked by 16 or 32
+// - src/dst blocking structures have to match
+// - either all or none of the HWD dims are being reduced
+// - padded C is a multiple of 16
+
+// This implementation combines any HWD dimensions to a single index,
+// Leaving N, C, and HWD dimensions (plus blocked portions of C and
+// possibly N). Each of these dimensions is broken into chunks, and a
+// work item is assigned one of each of these chunks in the initial step.
+
+// The final phase finishes the reduction by reducing all of the chunks
+// belonging to reduction dimensions.
+
 struct gen9_reduction_t : public gpu_primitive_t {
     using gpu_primitive_t::gpu_primitive_t;
     struct pd_t : public gpu_reduction_pd_t {
@@ -40,9 +55,13 @@ struct gen9_reduction_t : public gpu_primitive_t {
         DECLARE_COMMON_PD_T("ocl:gen9", gen9_reduction_t);
 
         status_t init(engine_t *engine) {
+            using smask_t = primitive_attr_t::skip_mask_t;
             bool ok = set_default_params() == status::success
-                    && attr()->has_default_values()
-                    && !memory_desc_ndims_ok(src_md(), dst_md());
+                    && attr_.has_default_values(
+                            smask_t::post_ops | smask_t::gpu_attr)
+                    && !memory_desc_ndims_ok(src_md(), dst_md())
+                    && post_ops_with_binary_ok(attr(), dst_md()->data_type, 5)
+                    && attr_.set_default_formats(dst_md(0)) == status::success;
             if (!ok) return status::unimplemented;
 
             CHECK(init_conf(engine));
@@ -59,7 +78,7 @@ struct gen9_reduction_t : public gpu_primitive_t {
     };
 
     status_t init(engine_t *engine) override {
-        compute::kernel_ctx_t kernel_ctx;
+        compute::kernel_ctx_t kernel_ctx(pd()->attr());
 
         status_t status = pd()->init_kernel_ctx(kernel_ctx);
         CHECK(status);
@@ -67,9 +86,11 @@ struct gen9_reduction_t : public gpu_primitive_t {
         status = create_kernel(
                 engine, &initial_kernel, "gen9_initial_reduce", kernel_ctx);
         CHECK(status);
-        status = create_kernel(
-                engine, &final_kernel, "gen9_final_reduce", kernel_ctx);
-        CHECK(status);
+        if (!pd()->conf.skip_final_phase) {
+            status = create_kernel(
+                    engine, &final_kernel, "gen9_final_reduce", kernel_ctx);
+            CHECK(status);
+        }
 
         return status::success;
     }

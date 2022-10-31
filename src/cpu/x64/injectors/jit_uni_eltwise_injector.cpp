@@ -418,6 +418,7 @@ void jit_uni_eltwise_injector_f32<isa, Wmm>::tanh_compute_vector_fwd(
                 // needed for gather instruction
                 h->uni_vxorps(vmm_mask, vmm_mask, vmm_mask);
                 break;
+            case avx512_core_fp16:
             case avx512_core_bf16:
             case avx512_core: break;
             default: assert(!"unimplemented");
@@ -455,6 +456,7 @@ void jit_uni_eltwise_injector_f32<isa, Wmm>::tanh_compute_vector_fwd(
                 break;
             }
                 // use gather instruction
+            case avx512_core_fp16:
             case avx512_core_bf16:
             case avx512_core:
                 // we use vpermt2ps to not override the indices

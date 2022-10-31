@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2021 Intel Corporation
+* Copyright 2019-2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,6 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include <CL/sycl.hpp>
-
 #include "oneapi/dnnl/dnnl_sycl.h"
 
 #include "common/c_types_map.hpp"
@@ -25,10 +23,13 @@
 #include "sycl/sycl_engine.hpp"
 #include "sycl/sycl_stream.hpp"
 
-using namespace dnnl::impl;
+using dnnl::impl::engine_t;
+using dnnl::impl::status_t;
+using dnnl::impl::stream_t;
 
 status_t dnnl_sycl_interop_stream_create(
         stream_t **stream, engine_t *engine, void *queue) {
+    using namespace dnnl::impl;
     bool args_ok = true && !utils::any_null(stream, engine, queue)
             && engine->runtime_kind() == runtime_kind::sycl;
     if (!args_ok) return status::invalid_arguments;
@@ -40,6 +41,7 @@ status_t dnnl_sycl_interop_stream_create(
 }
 
 status_t dnnl_sycl_interop_stream_get_queue(stream_t *stream, void **queue) {
+    using namespace dnnl::impl;
     bool args_ok = true && !utils::any_null(queue, stream)
             && stream->engine()->runtime_kind() == runtime_kind::sycl;
 

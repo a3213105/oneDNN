@@ -32,7 +32,10 @@
 // Uncomment this when jit::ir debugging is required:
 //#define GEN_CONV_DEBUG
 
-#ifdef GEN_CONV_DEBUG
+// Uncomment this when jit::ir profiling is required:
+//#define GEN_CONV_PROFILE
+
+#ifdef GEN_CONV_PROFILE
 #include "common/profiler.hpp"
 #endif
 
@@ -215,7 +218,7 @@ private:
 // related messages. Usage:
 //     ir_assert(condition) << "Error message" << ...;
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(GEN_CONV_DEBUG)
 #define ir_assert(cond) \
     !(cond) \
             && dnnl::impl::gpu::jit::ir_utils::error_stream_t( \
@@ -238,7 +241,7 @@ public:
     operator bool() const { return true; }
 
     static bool is_enabled() {
-#ifdef GEN_CONV_DEBUG
+#if defined(GEN_CONV_DEBUG) || defined(GEN_CONV_PROFILE)
         static const int log_level(getenv_int("log_level", LOG_LEVEL));
         return log_level >= level;
 #else
@@ -353,6 +356,87 @@ inline std::ostream &operator<<(std::ostream &out, const std::vector<T> &v) {
     return out;
 }
 
+class table_t {
+public:
+    table_t(const std::string &title, const std::vector<std::string> &header)
+        : title_(title), header_(header) {}
+
+    template <typename T>
+    table_t &operator<<(const T &value) {
+        std::ostringstream oss;
+        oss << value;
+        auto str_value = oss.str();
+        size_t pos = 0;
+        for (size_t i = 0; i < str_value.length(); i++) {
+            if (str_value[i] != '\n') continue;
+            cur_row_.push_back(str_value.substr(pos, i - pos));
+            new_row();
+            pos = i + 1;
+        }
+        if (str_value.empty() || pos != str_value.length()) {
+            cur_row_.push_back(str_value.substr(pos, str_value.length() - pos));
+        }
+        return *this;
+    }
+
+    table_t &operator<<(std::ostream &(*f)(std::ostream &)) {
+        auto _endl
+                = (std::basic_ostream<char> & (*)(std::basic_ostream<char> &))
+                        std::endl;
+        if (f == _endl) new_row();
+        return *this;
+    }
+
+    std::string str() const {
+        std::ostringstream oss;
+        size_t n = header_.size();
+        std::vector<size_t> widths(n);
+        for (size_t i = 0; i < n; i++)
+            widths[i] = header_[i].length();
+        for (auto &r : rows_) {
+            for (size_t i = 0; i < n; i++) {
+                widths[i] = std::max(widths[i], r[i].length());
+            }
+        }
+        auto print = [&](std::ostream &out, size_t idx, const std::string &s) {
+            int w = (int)widths[idx] + 2;
+            out << std::setw(w);
+            out << (idx > 0 ? std::right : std::left);
+            out << s;
+        };
+        oss << title_ << std::endl;
+        for (size_t i = 0; i < n; i++) {
+            print(oss, i, header_[i]);
+        }
+        oss << std::endl;
+        for (auto &r : rows_) {
+            for (size_t i = 0; i < n; i++) {
+                print(oss, i, r[i]);
+            }
+            if (&r != &rows_.back()) oss << std::endl;
+        }
+        return oss.str();
+    }
+
+private:
+    void new_row() {
+        ir_assert(cur_row_.size() == header_.size());
+        rows_.emplace_back();
+        rows_.back().swap(cur_row_);
+    }
+
+    std::string title_;
+    std::vector<std::string> header_;
+    std::vector<std::vector<std::string>> rows_;
+
+    std::vector<std::string> cur_row_;
+};
+
+inline std::ostream &operator<<(std::ostream &out, const table_t &table) {
+    out << table.str();
+    return out;
+}
+
 inline bool getenv_bool(const char *s, bool def) {
     return getenv_int(s, def ? 1 : 0) == 1;
 }
@@ -449,7 +533,7 @@ void for_each(const std::vector<T> &bounds, const F &f) {
 }
 
 struct debug_profiler_t {
-#ifdef GEN_CONV_DEBUG
+#ifdef GEN_CONV_PROFILE
     debug_profiler_t(std::string profile_name) : profile(profile_name) {};
     void start() { profile.start(); };
     void stamp(const char *name) { profile.stamp(name); };

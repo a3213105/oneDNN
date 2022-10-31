@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2020-2021 Intel Corporation
+# Copyright 2020-2022 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,13 @@ file(GLOB_RECURSE SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/*.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp
     )
+
+if(DNNL_GPU_CONV_DEBUG)
+    file(GLOB_RECURSE conv_sources ${CMAKE_CURRENT_SOURCE_DIR}/conv/*.cpp)
+    foreach(f ${conv_sources})
+    set_source_files_properties(${f} PROPERTIES COMPILE_FLAGS "-DGEN_CONV_DEBUG")
+    endforeach()
+endif()
 
 set(OBJ_LIB ${DNNL_LIBRARY_NAME}_gpu_jit)
 add_library(${OBJ_LIB} OBJECT ${SOURCES})

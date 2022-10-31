@@ -91,23 +91,27 @@ struct memory_desc_wrapper : public c_compatible {
     /** returns true if memory descriptor is zero */
     bool is_zero() const { return ndims() == 0; }
 
-    /** returns true if memory descriptor contains zero as one of its dim */
-    bool has_zero_dim() const {
+    /** returns true if memory descriptor contains `val` as one of its dim */
+    bool has_dim_value(dim_t val) const {
         for (int d = 0; d < ndims(); ++d)
-            if (dims()[d] == 0) return true;
+            if (dims()[d] == val) return true;
         return false;
     }
+
+    /** returns true if memory descriptor contains zero as one of its dim */
+    bool has_zero_dim() const { return has_dim_value(0); }
 
     /** return the size of data type (a shortcut) */
     size_t data_type_size() const { return types::data_type_size(data_type()); }
 
     /** return the size of data type of additional buffer */
     size_t additional_buffer_data_size(uint64_t flag_select) const {
-        if (flag_select & memory_extra_flags::compensation_conv_s8s8)
-            return sizeof(int32_t);
-        if (flag_select & memory_extra_flags::rnn_u8s8_compensation)
+        using namespace memory_extra_flags;
+        if (flag_select & compensation_conv_s8s8) return sizeof(int32_t);
+        if ((flag_select & rnn_u8s8_compensation)
+                && !types::extra_flag_rnn_s8s8_compensation_is_set(flag_select))
             return sizeof(float);
-        if (flag_select & memory_extra_flags::compensation_conv_asymmetric_src)
+        if (flag_select & compensation_conv_asymmetric_src)
             return sizeof(int32_t);
         return 0;
     }
@@ -115,9 +119,14 @@ struct memory_desc_wrapper : public c_compatible {
     /** return true if memory format has additional buffer */
     bool is_additional_buffer() const {
         using namespace memory_extra_flags;
-        return (extra().flags
-                & (compensation_conv_s8s8 | rnn_u8s8_compensation
-                        | compensation_conv_asymmetric_src));
+        // Currently compensation is not required for rnn_s8s8_compensation,
+        // but it has common bit with rnn_u8s8_compensation constant so we have
+        // to exclude rnn_s8s8_compensation case explicitly
+        return ((extra().flags
+                        & (compensation_conv_s8s8 | rnn_u8s8_compensation
+                                | compensation_conv_asymmetric_src))
+                && !types::extra_flag_rnn_s8s8_compensation_is_set(
+                        extra().flags));
     }
 
     /** returns the size required for a particular extra memory buffer */
@@ -136,7 +145,10 @@ struct memory_desc_wrapper : public c_compatible {
             return calculate_size(extra().compensation_mask,
                     additional_buffer_data_size(flag));
         }
-        if (extra().flags & rnn_u8s8_compensation) {
+
+        if ((extra().flags & rnn_u8s8_compensation)
+                && !types::extra_flag_rnn_s8s8_compensation_is_set(
+                        extra().flags)) {
             return calculate_size(extra().compensation_mask,
                     additional_buffer_data_size(flag));
         }

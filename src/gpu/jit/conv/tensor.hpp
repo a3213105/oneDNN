@@ -84,6 +84,14 @@ public:
         return true;
     }
 
+    bool is_divisible(const tensor_t &other) const {
+        if (ndims() != other.ndims()) return false;
+        for (int i = 0; i < ndims(); i++) {
+            if (dims_[i] % other.dims_[i] != 0) return false;
+        }
+        return true;
+    }
+
     std::string str() const {
         using ir_utils::operator<<;
 
@@ -1113,45 +1121,27 @@ private:
 // layouts.
 class layout_iterator_t {
 public:
-    layout_iterator_t(const layout_t &l) : l_(&l), block_idx_(-1), block_(1) {}
-
-    layout_iterator_t &operator=(const layout_iterator_t &other) {
-        l_ = other.l_;
-        block_idx_ = other.block_idx_;
-        block_ = other.block_;
-        return *this;
-    }
+    layout_iterator_t(const layout_t &l) : l_(l), block_idx_(-1), block_(1) {}
 
     bool has_next() const {
         dim_t b = block_;
         int b_idx = block_idx_;
         while (b == 1) {
             b_idx++;
-            if (b_idx >= int(l_->blocks().size())) return false;
-            b = int(l_->blocks()[b_idx].block);
+            if (b_idx >= int(l_.blocks().size())) return false;
+            b = int(l_.blocks()[b_idx].block);
         }
         return true;
     }
 
-    layout_iterator_t &operator++() { return next(); }
-
-    // If factor hint is set, searches for the maximum factor that is less or
-    // equal than the hint. If no such factor or hint is unset, searches for
-    // the smallest factor.
-    layout_iterator_t &next(int factor_hint = -1) {
+    layout_iterator_t &operator++() {
         ir_assert(has_next());
         while (block_ == 1) {
             block_idx_++;
-            block_ = int(l_->blocks()[block_idx_].block);
-        }
-        // Handle factor hint.
-        if (factor_hint != -1) {
-            int factor = utils::max_div(block_, factor_hint);
-            block_ /= factor;
-            if (factor != 1) return *this;
+            block_ = int(l_.blocks()[block_idx_].block);
         }
         // Find smallest factor.
-        for (int factor = 2; factor <= (int)block_; factor++) {
+        for (int factor = 2; factor <= int(block_); factor++) {
             if (block_ % factor == 0) {
                 block_ /= factor;
                 return *this;
@@ -1163,9 +1153,9 @@ public:
     }
 
     tensor_t tile() const {
-        std::vector<dim_t> dims(l_->ndims(), 1);
+        std::vector<dim_t> dims(l_.ndims(), 1);
         for (int i = 0; i <= block_idx_; i++) {
-            auto &b = l_->blocks()[i];
+            auto &b = l_.blocks()[i];
             int b_block = b.block;
             if (i == block_idx_) b_block /= block_;
             dims[b.dim_idx] *= b_block;
@@ -1176,7 +1166,7 @@ public:
     int nblocks() const { return block_idx_ + 1; }
 
     layout_t outer_layout() const {
-        auto &blocks = l_->blocks();
+        auto &blocks = l_.blocks();
         std::vector<block_t> outer_blocks;
         if (block_ > 1) {
             auto &b = blocks[block_idx_];
@@ -1184,13 +1174,13 @@ public:
             outer_blocks[0].block = block_;
             outer_blocks[0].stride = b.stride * (b.block / block_);
         }
-        outer_blocks.insert(outer_blocks.end(), blocks.begin() + block_idx_ + 1,
-                blocks.end());
-        return layout_t(l_->type(), l_->ndims(), l_->offset(), outer_blocks);
+        outer_blocks.insert(outer_blocks.end(),
+                blocks.begin() + (block_idx_ + 1), blocks.end());
+        return layout_t(l_.type(), l_.ndims(), l_.offset(), outer_blocks);
     }
 
 private:
-    const layout_t *l_;
+    const layout_t &l_;
 
     int block_idx_;
     dim_t block_;
@@ -1668,7 +1658,15 @@ public:
 
     // FIXME: Offset of the returned layout is always 0.
     layout_t create_pseudo_vlayout() const {
-        return create_pseudo_vlayout(tlayout_);
+        return create_pseudo_vlayout(normalized_tlayout());
+    }
+
+    layout_t normalized_tlayout() const {
+        auto blocks = move_size_1_blocks_outer();
+        blocks = layout_t::normalize_blocks(tlayout_.ndims(), blocks, false);
+        auto layout
+                = layout_t(type(), tlayout_.ndims(), offset(), blocks, false);
+        return layout;
     }
 
     layout_t create_dense_vlayout() const {
@@ -1869,6 +1867,26 @@ private:
             vargs[vidx] = i;
             create_mask_tensor(mask_tensor, _vlayout, vidx + 1, vargs, tmask);
         }
+    }
+
+    std::vector<block_t> move_size_1_blocks_outer() const {
+        std::vector<block_t> new_blocks;
+        std::vector<block_t> size_1_blocks;
+        for (auto &b : tlayout_.blocks()) {
+            if (b.block == 1 && vdims_[b.dim_idx] == 1) {
+                size_1_blocks.emplace_back(b);
+            } else {
+                new_blocks.emplace_back(b);
+            }
+        }
+        stride_t stride = new_blocks.empty()
+                ? stride_t(1)
+                : new_blocks.back().block * new_blocks.back().stride;
+        for (auto &b : size_1_blocks) {
+            b.stride = stride;
+            new_blocks.emplace_back(b);
+        }
+        return new_blocks;
     }
 
     std::vector<expr_t> vvars_;

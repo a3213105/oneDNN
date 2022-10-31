@@ -25,3 +25,6 @@
 
 # bf16
 --batch=test_pool_bfloat16
+
+# f16
+--batch=test_pool_float16

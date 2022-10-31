@@ -17,10 +17,12 @@
 #include "gpu/jit/conv/config.hpp"
 
 #include <cctype>
+#include <cstring>
 
 #include "common/type_helpers.hpp"
 #include "gpu/jit/conv/block_2d_utils.hpp"
 #include "gpu/jit/conv/block_helper.hpp"
+#include "gpu/jit/conv/grf_usage.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -40,7 +42,8 @@ status_t conv_config_t::init_common_blocking() {
     bh->set_dim("oc", oc);
     //take into account blocked ic channels when selecting block sizes
     bh->set_dim("ic",
-            is_bwd_w && is_compute_nhwc("src") ? wei_layout.dims()[2] : ic);
+            is_bwd_w ? std::max(src_layout.dims()[2], wei_layout.dims()[2])
+                     : ic);
     bh->set_dims({"kd", "kh", "kw"}, {kd, kh, kw});
 
     bh->set_b_dims({"g"});
@@ -161,11 +164,6 @@ status_t conv_config_t::init_fwd(convolution_pd_t *conv_pd) {
 
     bh->set_base_iter_block("mb", mb_base_iter_blk);
 
-    if (is_small_ic() && !is_dw && is_dp_fma()) {
-        int wei_ic_blk = wei_layout.inner_block(2);
-        if (kw != 1) bh->set_max_iter_dim("ic", wei_ic_blk);
-    }
-
     bool use_sp_blocking = false;
     if (is_compute_nhwc("src")) {
         use_sp_blocking = should_use_spatial_blocking(od, oh, ow);
@@ -179,7 +177,7 @@ status_t conv_config_t::init_fwd(convolution_pd_t *conv_pd) {
         if (is_dw) bh->set_pref_tg_block(osp_name);
         bh->allow_split({osp_name, "mb"});
         bh->reorder({osp_name, "mb"});
-        if (!fuse_spatial && mb < 16 && iw % 8 != 0) {
+        if (!fuse_spatial && mb < 16 && iw % 8 != 0 && !is_dw) {
             bh->set_max_m_tg_dim(1);
         }
     } else {
@@ -535,43 +533,55 @@ static std::string build_tag(const std::vector<int> &inner_blocks,
     return tag;
 }
 
-int pick_block(int dim, int b0, int b1 = 0, int b2 = 0) {
+int pick_block_impl(bool prefer_rnd_up, int dim, int b0, int b1, int b2) {
     int blocks[3] = {b0, b1, b2};
     int prev_blk = 1;
     for (int i = 0; i < 3; i++) {
         if (blocks[i] == 0) continue;
-        if (dim < blocks[i]) return prev_blk;
+        if (prefer_rnd_up) {
+            if (dim <= blocks[i] / 2) return prev_blk;
+        } else {
+            if (dim < blocks[i]) return prev_blk;
+        }
         prev_blk = blocks[i];
     }
     return prev_blk;
 }
 
-struct nc_block_t {
-    nc_block_t(int n_block, int c_block)
-        : n_block_(n_block), c_block_(c_block) {}
+int pick_block_rnd_up(int dim, int b0, int b1 = 0, int b2 = 0) {
+    return pick_block_impl(true, dim, b0, b1, b2);
+}
 
-    int n_block() { return n_block_; }
-    int c_block() { return c_block_; }
+int pick_block(int dim, int b0, int b1 = 0, int b2 = 0) {
+    return pick_block_impl(false, dim, b0, b1, b2);
+}
+
+struct nc_block_t {
+    nc_block_t(int n_block, int c_block, bool nc_order = true)
+        : n_block_(n_block), c_block_(c_block), nc_order_(nc_order) {}
+
+    std::string tag() const {
+        std::vector<int> idxs = {1, 0};
+        if (!nc_order_) std::swap(idxs[0], idxs[1]);
+        return build_tag({n_block_, c_block_}, {1, 1}, {'a', 'b'}, idxs);
+    }
 
     // Ideally, this should only depend on data type, direction, mb, c, and g to
     // enable the same src/dst formats and avoid reorders between convolutions
-    static nc_block_t get_default_blocking(
-            type_t type, bool is_bwd_d, bool is_dw, int n, int c, int g) {
-
-        // Prefer blk if 2 * blk_dim > blk. Since blk_dim blocking is based on
-        // simd size, computational efficiency is the same.
-        auto small_c_blk = [&]() {
-            if (type.size() >= 4)
-                return 1;
-            else if (is_bwd_d)
-                // Bwd_d implementation does not support small channel block
-                return 1;
-            else
-                return 4 / type.size();
+    static nc_block_t get_default_blocking(type_t type, bool is_dw, int n,
+            int c, int g, bool is_input, bool is_small_ic) {
+        bool is_small_ic_input
+                = (type.size() <= 2 && is_input && !is_dw && is_small_ic);
+        auto c_block = [&]() {
+            // Special case for small input channel shapes with dpas.
+            if (is_small_ic_input) {
+                int packed_dword_elems = 4 / type.size();
+                return std::max(packed_dword_elems, utils::rnd_up_pow2(c));
+            }
+            auto default_c_blk = type.size() == 1 ? 32 : 16;
+            auto blk_dim = is_dw ? g : c;
+            return pick_block_rnd_up(blk_dim, default_c_blk);
         }();
-        auto default_c_blk = type.size() == 1 ? 32 : 16;
-        auto blk_dim = is_dw ? g : c;
-        auto c_block = pick_block(2 * blk_dim - 1, small_c_blk, default_c_blk);
 
         // Non-depthwise convolutions currently require channel is a multiple of
         // c_block. If that implementation restriction is removed, this logic
@@ -582,7 +592,7 @@ struct nc_block_t {
             auto default_n_blk = type.size() < 4 ? 32 : 16;
             if (c_block == 1)
                 return 1;
-            else if (c_block == small_c_blk)
+            else if (is_small_ic_input)
                 return pick_block(n, 8, 16);
             else
                 return pick_block(n, 16, default_n_blk);
@@ -594,6 +604,92 @@ struct nc_block_t {
 private:
     int n_block_;
     int c_block_;
+    bool nc_order_;
+};
+
+struct goi_block_t {
+    goi_block_t(fma_kind_t fma_kind, bool is_dw, bool is_bwd_d, int g_block,
+            int o_block, int i_block, int o_block_outer, int i_block_outer)
+        : fma_kind_(fma_kind)
+        , is_dw_(is_dw)
+        , is_bwd_d_(is_bwd_d)
+        , g_block_(g_block)
+        , o_block_(o_block)
+        , i_block_(i_block)
+        , o_block_outer_(o_block_outer)
+        , i_block_outer_(i_block_outer) {}
+
+    std::string tag() const {
+        std::vector<char> wei_letters(3, ' ');
+        char wei_letter = 'a';
+        for (int i = (is_dw_ ? 0 : 1); i < 3; i++) {
+            wei_letters[i] = wei_letter++;
+        }
+        std::vector<int> wei_idxs = {0, 1, 2}; // g, ic, oc
+        // dpas requires ic to go before oc in innermost blocks for weights.
+        if (fma_kind_ != fma_kind_t::mad) std::swap(wei_idxs[1], wei_idxs[2]);
+        if (is_bwd_d_) std::swap(wei_idxs[1], wei_idxs[2]);
+        return build_tag({g_block_, o_block_, i_block_},
+                {1, o_block_outer_, i_block_outer_}, wei_letters, wei_idxs);
+    }
+
+    static goi_block_t get_default_blocking(type_t type, int vec_size,
+            fma_kind_t fma_kind, bool is_bwd_d, bool is_small_ic, int g, int o,
+            int i) {
+        int x = o;
+        int y = i;
+        int g_block = 1;
+        int o_block = 1;
+        int i_block = 1;
+        int o_block_outer = 1;
+        int i_block_outer = 1;
+        int *x_block = &o_block;
+        int *y_block = &i_block;
+        int *x_block_outer = &o_block_outer;
+        int *y_block_outer = &i_block_outer;
+        // Backward by data requires flipped ic/oc in weights.
+        if (is_bwd_d) {
+            std::swap(x, y);
+            std::swap(x_block, y_block);
+            std::swap(x_block_outer, y_block_outer);
+        }
+        get_default_blocking(type, vec_size, fma_kind, is_bwd_d, is_small_ic, g,
+                x, y, g_block, *x_block, *y_block, *x_block_outer,
+                *y_block_outer);
+        return goi_block_t(fma_kind, is_dw(g, o, i), is_bwd_d, g_block, o_block,
+                i_block, o_block_outer, i_block_outer);
+    }
+
+    static void get_default_blocking(type_t type, int vec_size,
+            fma_kind_t fma_kind, bool is_bwd_d, bool is_small_ic, int g, int x,
+            int y, int &g_block, int &x_block, int &y_block, int &x_block_outer,
+            int &y_block_outer) {
+        if (is_dw(g, x, y)) {
+            g_block = type.is_x8() ? 32 : 16;
+        } else if (fma_kind == fma_kind_t::mad) {
+            x_block = vec_size;
+            y_block = pick_block(y, 8, 16);
+        } else {
+            int packed_dword_elems = 4 / type.size();
+            x_block = vec_size;
+            y_block = packed_dword_elems;
+            if (is_bwd_d || !is_small_ic) y_block_outer = 8;
+        }
+    }
+
+private:
+    static bool is_dw(int g, int o, int i) {
+        return (g > 1 && o == 1 && i == 1);
+    }
+
+    fma_kind_t fma_kind_;
+    bool is_dw_;
+    bool is_bwd_d_;
+    int g_block_;
+    int o_block_;
+    int i_block_;
+    int o_block_outer_;
+    int i_block_outer_;
 };
 
 void conv_config_t::init_data_tags(bool allow_src_reorder,
@@ -613,18 +709,6 @@ void conv_config_t::init_data_tags(bool allow_src_reorder,
     bool is_mad = (fma_kind == fma_kind_t::mad);
     int vec_size = hw_cfg.vec_size();
 
-    // Set order and letters for blocking dimensions.
-    std::vector<int> src_idxs = {1, 0};
-    std::vector<int> dst_idxs = {1, 0};
-    std::vector<char> wei_letters(3, ' ');
-    char wei_letter = 'a';
-    for (int i = (is_dw ? 0 : 1); i < 3; i++) {
-        wei_letters[i] = wei_letter++;
-    }
-    std::vector<int> wei_idxs = {0, 1, 2}; // g, ic, oc
-    // dpas requires ic to go before oc in innermost blocks for weights.
-    if (!is_mad) std::swap(wei_idxs[1], wei_idxs[2]);
-
     nc_block_t src_blk(1, 1), dst_blk(1, 1);
     if (is_bwd_w) {
         // The BWD_W implementation has some issues that prevent using
@@ -635,33 +719,29 @@ void conv_config_t::init_data_tags(bool allow_src_reorder,
         // Set blocks for source layout.
         int src_n_blk = 1;
         int src_c_blk = 1;
+        bool src_nc_order = true;
         if (is_small_ic() && !is_dw) {
             if (is_dp_fma() && allow_src_reorder) {
                 src_c_blk = 4;
                 src_n_blk = pick_block(mb, 32 / src_type_size);
-                std::swap(src_idxs[0], src_idxs[1]);
+                src_nc_order = false;
             } else if (is_dp_fma()) {
                 src_c_blk = 4 / src_type_size;
                 src_n_blk = pick_block(mb, 8, 16);
             }
-        } else if (is_mad && is_f32_conv()) {
-            src_c_blk = (is_src_byte ? 32 : 16);
-            src_n_blk = pick_block(mb, 16);
         } else {
+            auto default_n_blk = src_type_size < 4 ? 32 : 16;
             src_c_blk = (is_src_byte ? 32 : 16);
-            src_n_blk = pick_block(mb, 16, 32);
+            src_n_blk = pick_block(mb, 16, default_n_blk);
         }
 
         // Set blocks for destination layout.
         int dst_n_blk = 1;
         int dst_c_blk = 1;
-        if (is_mad && is_f32_conv()) {
-            dst_c_blk = (is_dst_byte ? 32 : 16);
-            dst_n_blk = pick_block(mb, 16);
-        } else {
-            dst_c_blk = (is_dst_byte ? 32 : 16);
-            dst_n_blk = pick_block(mb, 16, 32);
-        }
+
+        auto default_n_blk = types::data_type_size(dst_data_type) < 4 ? 32 : 16;
+        dst_c_blk = (is_dst_byte ? 32 : 16);
+        dst_n_blk = pick_block(mb, 16, default_n_blk);
 
         if (with_groups && g > 1 && !is_dw) {
             if (ic % src_c_blk != 0) src_c_blk = 1;
@@ -678,80 +758,46 @@ void conv_config_t::init_data_tags(bool allow_src_reorder,
         if (src_c_blk == 1) src_n_blk = 1;
         if (dst_c_blk == 1) dst_n_blk = 1;
 
-        src_blk = nc_block_t(src_n_blk, src_c_blk);
+        src_blk = nc_block_t(src_n_blk, src_c_blk, src_nc_order);
         dst_blk = nc_block_t(dst_n_blk, dst_c_blk);
     } else {
         // Set blocks for src/dst layout.
-        src_blk = nc_block_t::get_default_blocking(
-                src_data_type, is_bwd_d, is_dw, mb, ic, g);
+        src_blk = nc_block_t::get_default_blocking(src_data_type, is_dw, mb, ic,
+                g, is_fwd || is_bwd_w, is_small_ic());
         dst_blk = nc_block_t::get_default_blocking(
-                dst_data_type, is_bwd_d, is_dw, mb, oc, g);
+                dst_data_type, is_dw, mb, oc, g, is_bwd_d || is_bwd_w, false);
     }
 
-    src_tag = build_tag({src_blk.n_block(), src_blk.c_block()}, {1, 1},
-            {'a', 'b'}, src_idxs);
-    dst_tag = build_tag({dst_blk.n_block(), dst_blk.c_block()}, {1, 1},
-            {'a', 'b'}, dst_idxs);
+    auto wei_blk = goi_block_t::get_default_blocking(wei_compute_type, vec_size,
+            fma_kind, is_bwd_d, is_small_ic(), g, oc, ic);
 
-    // Set blocks for weights layout.
-    int wei_g_blk = 1;
-    int wei_o_blk = 1;
-    int wei_o_blk_outer = 1;
-    int wei_i_blk = 1;
-    int wei_i_blk_outer = 1;
-    bool is_wei_byte
-            = utils::one_of(wei_compute_type, data_type::s8, data_type::u8);
-    auto init_mad_wei_oi_blocks = [&](bool block_by_o, int &o, int &i) {
-        if (block_by_o) {
-            o = vec_size;
-            i = pick_block(ic, 8, 16);
-        } else {
-            o = pick_block(oc, 8, 16);
-            i = vec_size;
-        }
-    };
-    if (is_dw) {
-        wei_g_blk = (is_wei_byte ? 32 : 16);
-    } else if (is_mad) {
-        init_mad_wei_oi_blocks(true, wei_o_blk, wei_i_blk);
-    } else {
-        // Set dpas blocks.
-        int packed_dword_elems = 4 / types::data_type_size(wei_compute_type);
-        wei_o_blk = vec_size;
-        wei_i_blk = packed_dword_elems;
-        if (!is_small_ic()) {
-            wei_i_blk_outer = 8;
+    src_tag = src_blk.tag();
+    wei_tag = wei_blk.tag();
+    dst_tag = dst_blk.tag();
 
-            // XXX: This is to keep compatibility with the current implementation
-            // of zero points. Other than that the outer oc block doesn't affect
-            // performance/correctness.
-            if (is_src_byte) wei_o_blk_outer = 32 / vec_size;
+    // Use OhwIXoYi weights for small-channel forward convolution to ensure
+    // c-after-w order of reduction blocks to match the source layout.
+    if (is_small_ic() && !is_dw && is_fwd && is_dp_fma()) {
+        const char *patterns[] = {"ABx", "AxB", "Abx", "Axb", nullptr};
+        bool found = false;
+        for (auto *p = patterns; *p; p += 2) {
+            auto pos = wei_tag.find(*p);
+            if (pos == std::string::npos) continue;
+            wei_tag = wei_tag.replace(pos, std::strlen(*p), *(p + 1));
+            found = true;
+            break;
         }
+        ir_assert(found) << wei_tag;
     }
 
-    auto common_wei_tag = build_tag({wei_g_blk, wei_o_blk, wei_i_blk},
-            {1, wei_o_blk_outer, wei_i_blk_outer}, wei_letters, wei_idxs);
-
-    // Backward by data requires flipped ic/oc in weights.
-    if (is_bwd_d) {
-        if (is_mad) {
-            init_mad_wei_oi_blocks(false, wei_o_blk, wei_i_blk);
-        } else {
-            std::swap(wei_o_blk, wei_i_blk);
-        }
-        std::swap(wei_o_blk_outer, wei_i_blk_outer);
-        std::swap(wei_idxs[1], wei_idxs[2]);
-        wei_tag = build_tag({wei_g_blk, wei_o_blk, wei_i_blk},
-                {1, wei_o_blk_outer, wei_i_blk_outer}, wei_letters, wei_idxs);
-        if ((wei_i_blk * wei_i_blk_outer) != (wei_o_blk * wei_o_blk_outer))
-            allow_wei_reorder = false;
-
-    } else {
-        wei_tag = common_wei_tag;
+    // Align weights layout between forward/backward by data in some cases via
+    // internal reorder to eliminate user-side reorder.
+    auto fwd_wei_blk = goi_block_t::get_default_blocking(wei_compute_type,
+            vec_size, fma_kind, /*is_bwd_d=*/false, is_small_ic(), g, oc, ic);
+    auto fwd_wei_tag = fwd_wei_blk.tag();
+    if (fwd_wei_tag != wei_tag && allow_wei_reorder) {
+        user_wei_tag = fwd_wei_tag;
     }
-
-    if (common_wei_tag != wei_tag && allow_wei_reorder)
-        user_wei_tag = common_wei_tag;
 }
 
 status_t conv_config_t::init_data_layouts(convolution_pd_t *conv_pd) {
@@ -770,6 +816,7 @@ status_t conv_config_t::init_data_layouts(convolution_pd_t *conv_pd) {
     // If src/dst is nhwc then set the other one with any to nhwc too (except
     // 1st convolution).
     bool is_small_ic_non_dw = is_small_ic() && !is_dw;
+    bool is_small_oc_non_dw = is_small_oc() && !is_dw;
     bool propagate_nhwc = (matches_tag(src_md, "axb") && !is_small_ic_non_dw)
             || matches_tag(dst_md, "axb");
     if (propagate_nhwc) {
@@ -781,7 +828,7 @@ status_t conv_config_t::init_data_layouts(convolution_pd_t *conv_pd) {
     // Allow internal weights reorder in some cases. The goal is to have
     // aligned weights layouts between fwd/bwd_d/bwd_w to reduce potential
     // weights reorders during training. In general it's more efficient than
-    // the external reorder but it has a number of restrictions.
+    // the external reorder.
     bool allow_wei_reorder = is_ge_xe_hpc() && is_dp_fma();
     bool allow_dst_reorder = false;
     bool src_abx = matches_tag(src_md, "abx");
@@ -790,12 +837,20 @@ status_t conv_config_t::init_data_layouts(convolution_pd_t *conv_pd) {
         allow_src_reorder = true;
     }
 
-    init_data_tags(allow_src_reorder, allow_dst_reorder, allow_wei_reorder,
+    init_data_tags(allow_src_reorder, allow_wei_reorder, allow_dst_reorder,
             src_tag, wei_tag, dst_tag, user_wei_tag);
 
     if (allow_src_reorder) {
         if (src_abx) user_src_tag = "abx";
         if (src_axb) user_src_tag = "axb";
+    }
+
+    // Prefer nhwc for small-channel inputs.
+    if (user_src_tag.empty() && is_fwd && is_small_ic_non_dw) {
+        if (!matches_tag(src_md, src_tag)) user_src_tag = "axb";
+    }
+    if (user_dst_tag.empty() && is_bwd_d && is_small_oc_non_dw) {
+        if (!matches_tag(dst_md, dst_tag)) user_dst_tag = "axb";
     }
 
     if (user_src_tag.empty()) user_src_tag = src_tag;
@@ -1258,9 +1313,19 @@ std::string conv_config_t::str() const {
     // clang-format off
     oss << "  HW config:                  " << hw_cfg.str() << std::endl;
     oss << "  Problem:                    " << desc_str() << std::endl;
-    oss << "  Source layout:              " << tensor_config.compute_layout("src") << std::endl;
-    oss << "  Weights layout:             " << tensor_config.compute_layout("wei") << std::endl;
-    oss << "  Destination layout:         " << tensor_config.compute_layout("dst") << std::endl;
+    const char *tags[] = {"src", "wei", "dst"};
+    const char *names[] = {"Source", "Weights", "Destination"};
+    for (int i = 0; i < 3; i++) {
+        std::string desc = std::string(names[i]) + " layout:";
+        desc.insert(desc.size(), 28 - desc.size(), ' ');
+        auto &compute_layout = tensor_config.compute_layout(tags[i]);
+        auto &user_layout = tensor_config.user_layout(tags[i]);
+        oss << "  " << desc << compute_layout;
+        if (user_layout != compute_layout) {
+            oss << " (user: " << user_layout << ")";
+        }
+        oss << std::endl;
+    }
     oss << bh->brief_str();
     oss << "  Kernel grid:                " << make_seq_print_helper(kernel_grid_dim, " x ") << std::endl;
     oss << "  Thread group:               " << make_seq_print_helper(tg_grid_dim, " x ") << std::endl;
@@ -1283,418 +1348,8 @@ std::string conv_config_t::str() const {
     return oss.str();
 }
 
-class access_grf_usage_helper_t {
-public:
-    access_grf_usage_helper_t(const layout_t &mem_layout, int elems,
-            int reg_bytes, bool is_slm, bool use_2d_send)
-        : mem_type_size_(mem_layout.type().size())
-        , reg_bytes_(reg_bytes)
-        , is_slm_(is_slm)
-        , use_2d_send_(use_2d_send) {
-        init_message_size(mem_layout);
-        init_payload_size(elems);
-        init_header_size();
-    }
-
-    // This setting is related to dpasw loads. dpasw reuses registers between
-    // fused threads so each of the fused threads need to load only half of the
-    // data it will access.
-    void enable_fused_eus_sharing() { enabled_fused_eus_sharing_ = true; }
-
-    int payload_regs() const {
-        int ret = payload_size_ / reg_bytes_;
-        if (enabled_fused_eus_sharing_) ret = utils::div_up(ret, 2);
-        return ret;
-    }
-
-    int header_regs_per_msg() const {
-        return header_size_per_msg_ / reg_bytes_;
-    }
-
-    int header_regs() const {
-        int ret = nmsgs_ * header_regs_per_msg();
-        if (enabled_fused_eus_sharing_) ret = utils::div_up(ret, 2);
-        return ret;
-    }
-
-private:
-    void init_message_size(const layout_t &mem_layout) {
-        auto l = mem_layout.innermost_block_layout();
-        int block_bytes = (is_slm_ ? oword_bytes_ : hword_bytes_);
-        int max_block_bytes = (is_slm_ ? 16 * oword_bytes_ : 8 * hword_bytes_);
-        block_t b0;
-        int b0_size = mem_type_size_;
-        auto &mem_blocks = mem_layout.blocks();
-        if (!mem_blocks.empty()) {
-            b0 = mem_blocks[0];
-            b0_size = b0.block * mem_type_size_;
-        }
-        if (use_2d_send_) {
-            is_block_ = true;
-            // It's hard to determine 2D block message decomposition at this
-            // point but in general 2D block messages are larger so use 2x of a
-            // regular block message (empirical estimate).
-            msg_size_ = 2 * max_block_bytes;
-            payload_bytes_per_elem_ = mem_type_size_;
-        } else if (l.size() % block_bytes == 0) {
-            is_block_ = true;
-            msg_size_ = (l.size() % max_block_bytes == 0) ? max_block_bytes
-                                                          : block_bytes;
-            payload_bytes_per_elem_ = mem_type_size_;
-        } else if (!b0.is_empty() && b0_size % block_bytes == 0) {
-            is_block_ = true;
-            msg_size_ = block_bytes;
-            payload_bytes_per_elem_ = mem_type_size_;
-        } else {
-            ir_assert(!is_slm_) << "Unexpected scattered messages with SLM.";
-            // Assume scattered byte SIMD16 load as the worst case. Check if
-            // we can use byte x {1,2,4} messages.
-            int slots = 16;
-            int bytes_per_slot = 4;
-            for (int x : {4, 2, 1}) {
-                if (x < bytes_per_slot && mem_type_size_ != x) continue;
-                if (b0_size % x == 0) {
-                    msg_size_ = slots * x;
-                    payload_bytes_per_elem_
-                            = mem_type_size_ * (bytes_per_slot / x);
-                    break;
-                }
-            }
-            ir_assert(msg_size_ > 0);
-        }
-    }
-
-    void init_payload_size(int elems) {
-        int elems_per_msg = utils::div_up(msg_size_, mem_type_size_);
-        int payload_per_msg = elems_per_msg * payload_bytes_per_elem_;
-        int payload_per_msg_grf_aligned
-                = utils::rnd_up(payload_per_msg, reg_bytes_);
-        nmsgs_ = utils::div_up(elems * mem_type_size_, msg_size_);
-        payload_size_ = nmsgs_ * payload_per_msg_grf_aligned;
-    }
-
-    void init_header_size() {
-        if (is_block_) {
-            // One register per header for block messages.
-            header_size_per_msg_ = reg_bytes_;
-        } else {
-            // Assume SIMD16 with A64 address model.
-            int slots = 16;
-            int bytes_per_slot = sizeof(uint64_t);
-            header_size_per_msg_
-                    = utils::rnd_up(slots * bytes_per_slot, reg_bytes_);
-        }
-    }
-
-    static const int oword_bytes_ = 16;
-    static const int hword_bytes_ = 32;
-
-    int mem_type_size_ = 0;
-    int reg_bytes_ = 0;
-    bool is_slm_ = false;
-    bool use_2d_send_ = false;
-    bool enabled_fused_eus_sharing_ = false;
-
-    // Whether message is block or scattered.
-    bool is_block_ = false;
-
-    // Amount of memory that can be read by a single message from global memory.
-    int msg_size_ = 0;
-
-    // How many bytes are occupied by a single element in the message payload.
-    int payload_bytes_per_elem_ = 0;
-
-    // Size of GRF buffers for all messages to load data.
-    int payload_size_ = 0;
-
-    // Number of messages to load data.
-    int nmsgs_ = 0;
-
-    // Size of header buffer per message.
-    int header_size_per_msg_ = 0;
-};
-
-// Helper class to provide GRF usage estimation.
-class grf_usage_helper_t {
-public:
-    grf_usage_helper_t(const conv_config_t &cfg) : cfg_(cfg) {
-        auto &tg_grid_dim = cfg_.tg_grid_dim;
-
-        reg_bytes_ = cfg_.grf_size();
-        tg_size_ = tg_grid_dim[0] * tg_grid_dim[1] * tg_grid_dim[2];
-        m_tg_dim_ = tg_grid_dim[1];
-        n_tg_dim_ = tg_grid_dim[0];
-
-        int m_iter_blk = utils::div_up(cfg_.m_tg_blk, tg_grid_dim[1]);
-        int n_iter_blk = utils::div_up(cfg_.n_tg_blk, tg_grid_dim[0]);
-
-        if (!cfg_.use_ow_kw_grf_cache) {
-            a_thr_elems_ = cfg_.b_blk * m_iter_blk * cfg_.k_blk;
-        } else {
-            ir_assert(!cfg_.use_a_slm);
-            int a_m_blk = (cfg_.sw * (m_iter_blk - 1)
-                    + (cfg_.kw - 1) * (1 + cfg_.dw) + 1);
-            int a_k_blk = utils::div_up(cfg_.k_blk, cfg_.kw);
-            a_thr_elems_ = cfg_.b_blk * a_m_blk * a_k_blk;
-        }
-
-        b_thr_elems_ = cfg_.b_blk * cfg_.k_blk * n_iter_blk;
-        c_thr_elems_ = cfg_.b_blk * m_iter_blk * n_iter_blk;
-        a_tg_elems_ = a_thr_elems_ * m_tg_dim_;
-        b_tg_elems_ = b_thr_elems_ * n_tg_dim_;
-        a_sub_tile_elems_ = utils::div_up(a_thr_elems_, cfg_.a_sub_tiles);
-        b_sub_tile_elems_ = utils::div_up(b_thr_elems_, cfg_.b_sub_tiles);
-    }
-
-    int estimate() const {
-        int regs = 0;
-
-        int max_reuse_header_regs = 0;
-        int a_slm_store_payload_regs = 0;
-        int b_slm_store_payload_regs = 0;
-
-        int c_buf_usage = estimate_c_buf_usage();
-        int gmem_load_usage = estimate_gmem_load_usage(max_reuse_header_regs);
-        int slm_store_usage = estimate_slm_store_usage(a_slm_store_payload_regs,
-                b_slm_store_payload_regs, max_reuse_header_regs);
-        int slm_load_usage = estimate_slm_load_usage(max_reuse_header_regs);
-        int reorder_usage = estimate_reorder_usage(
-                a_slm_store_payload_regs, b_slm_store_payload_regs);
-
-        // clang-format off
-        ir_trace() << "GRF estimate:" << std::endl;
-        ir_trace() << "   c_buf_usage:           " << c_buf_usage << std::endl;
-        ir_trace() << "   gmem_load_usage:       " << gmem_load_usage << std::endl;
-        ir_trace() << "   slm_store_usage:       " << slm_store_usage << std::endl;
-        ir_trace() << "   slm_load_usage:        " << slm_load_usage << std::endl;
-        ir_trace() << "   reorder_usage:         " << reorder_usage << std::endl;
-        ir_trace() << "   max_reuse_header_regs: " << max_reuse_header_regs << std::endl;
-        // clang-format on
-
-        regs += c_buf_usage;
-        regs += gmem_load_usage;
-        regs += slm_store_usage;
-        regs += slm_load_usage;
-        regs += reorder_usage;
-        regs += max_reuse_header_regs;
-        regs += cfg_.reserved_regs;
-
-        return regs;
-    }
-
-private:
-    int estimate_c_buf_usage() const {
-        int c_bytes = c_thr_elems_ * cfg_.acc_data_type_size;
-        return utils::div_up(c_bytes, reg_bytes_);
-    }
-
-    int estimate_gmem_load_usage(int &max_reuse_header_regs) const {
-        int regs = 0;
-        for (bool is_a : {true, false}) {
-            bool use_slm = ab_use_slm(is_a);
-            int per_thr_elems = utils::div_up(ab_tg_elems(is_a), tg_size_);
-            int load_elems
-                    = (use_slm ? per_thr_elems : ab_sub_tile_elems(is_a));
-            auto layout = get_gmem_layout(is_a);
-            bool use_2d_send
-                    = (is_a ? cfg_.can_use_a_2d_send : cfg_.can_use_b_2d_send);
-            access_grf_usage_helper_t load(layout, load_elems, reg_bytes_,
-                    /*is_slm=*/false, use_2d_send);
-            if (is_a && !use_slm && cfg_.fma_kind == fma_kind_t::dpasw)
-                load.enable_fused_eus_sharing();
-            int mult = (use_slm ? cfg_.gmem_bufs : 1);
-            regs += mult * load.payload_regs();
-            if (cfg_.reuse_headers) {
-                max_reuse_header_regs = std::max(
-                        max_reuse_header_regs, load.header_regs_per_msg());
-            } else {
-                int sub_tiles = (is_a ? cfg_.a_sub_tiles : cfg_.b_sub_tiles);
-                int mult = (use_slm ? 1 : sub_tiles);
-                bool use_2d_send = (is_a ? cfg_.can_use_a_2d_send
-                                         : cfg_.can_use_b_2d_send);
-                regs += mult * load.header_regs();
-                if (cfg_.use_prefetch) {
-                    regs += [&]() {
-                        if (use_2d_send) {
-                            // Catch issues due to how prefetch splits tiles
-                            auto &blocks = layout.blocks();
-                            if (is_a && blocks.size() > 1) {
-                                // Catch restriction in try_build_2d that
-                                // surface_height % h_tstride == 0
-                                if (blocks[1].block % blocks[1].stride)
-                                    return 8;
-                            } else if (!is_a && blocks.size() > 0) {
-                                // Catch restriction in get_send_hint
-                                if (blocks[0].block * layout.type().size()
-                                        >= 128)
-                                    return 2;
-                            }
-                        }
-                        return 0;
-                    }();
-
-                    access_grf_usage_helper_t prefetch(layout, per_thr_elems,
-                            reg_bytes_, /*is_slm=*/false, use_2d_send);
-                    regs += prefetch.header_regs();
-                }
-            }
-        }
-        return regs;
-    }
-
-    int estimate_slm_store_usage(int &a_payload_regs, int &b_payload_regs,
-            int &max_reuse_header_regs) const {
-        int regs = 0;
-        for (bool is_a : {true, false}) {
-            if (!ab_use_slm(is_a)) continue;
-
-            int per_thr_elems = utils::div_up(ab_tg_elems(is_a), tg_size_);
-            int bytes = per_thr_elems * ab_type_size(is_a);
-            auto slm_layout = dummy_slm_layout(bytes);
-            access_grf_usage_helper_t store(slm_layout, bytes, reg_bytes_,
-                    /*is_slm=*/true, /*use_2d_send=*/false);
-            int &payload_regs = (is_a ? a_payload_regs : b_payload_regs);
-            payload_regs = store.payload_regs();
-            if (cfg_.reuse_headers) {
-                max_reuse_header_regs = std::max(
-                        max_reuse_header_regs, store.header_regs_per_msg());
-            } else {
-                regs += store.header_regs();
-            }
-        }
-        return regs;
-    }
-
-    int estimate_slm_load_usage(int &max_reuse_header_regs) const {
-        int regs = 0;
-        for (bool is_a : {true, false}) {
-            if (!ab_use_slm(is_a)) continue;
-
-            int bytes = ab_sub_tile_elems(is_a) * ab_type_size(is_a);
-            auto slm_layout = dummy_slm_layout(bytes);
-            access_grf_usage_helper_t load(slm_layout, bytes, reg_bytes_,
-                    /*is_slm=*/true, /*use_2d_send=*/false);
-            if (is_a && cfg_.fma_kind == fma_kind_t::dpasw)
-                load.enable_fused_eus_sharing();
-            regs += load.payload_regs();
-            if (cfg_.reuse_headers) {
-                max_reuse_header_regs = std::max(
-                        max_reuse_header_regs, load.header_regs_per_msg());
-            } else {
-                regs += load.header_regs();
-            }
-        }
-
-        return regs;
-    }
-
-    // Extra registers for GRF <-> GRF reorders.
-    // Estimates upper bound for A/B reorders to temporary buffers.
-    int estimate_reorder_usage(int a_payload_regs, int b_payload_regs) const {
-        if (!cfg_.allow_a_grf_reorder && !cfg_.allow_b_grf_reorder) return 0;
-
-        int regs = 0;
-        if (cfg_.is_bwd_w) {
-            // Hardcode the size of the temporary reorder buffer for BWD_W to
-            // avoid suboptimal performance.
-            int bwd_w_reorder_regs = 16;
-            regs += bwd_w_reorder_regs;
-        }
-
-        for (bool is_a : {true, false}) {
-            bool allow_grf_reorder = (is_a ? cfg_.allow_a_grf_reorder
-                                           : cfg_.allow_b_grf_reorder);
-            if (!allow_grf_reorder) continue;
-            int reorder_regs = 0;
-            if (ab_use_slm(is_a)) {
-                int &payload_regs = (is_a ? a_payload_regs : b_payload_regs);
-                reorder_regs = payload_regs;
-            } else {
-                int size = ab_sub_tile_elems(is_a) * ab_type_size(is_a);
-                reorder_regs = utils::div_up(size, reg_bytes_);
-            }
-            regs += reorder_regs;
-        }
-
-        return regs;
-    }
-
-    layout_t get_gmem_layout(bool is_a) const {
-        auto layout = (is_a ? cfg_.a_layout() : cfg_.b_layout());
-        bool is_src_dst = is_a || cfg_.is_bwd_w;
-        if (is_src_dst && cfg_.is_dw) {
-            auto &blocks = layout.blocks();
-            if (!blocks.empty()) {
-                auto &b0 = blocks[0];
-                std::vector<block_t> new_blocks(
-                        blocks.begin() + 1, blocks.end());
-                // Remove the innermost block of channels for depthwise
-                // convolution.
-                if (b0.dim_idx == 2 && b0.block == 1) {
-                    layout = layout_t(layout.type(), layout.ndims(),
-                            layout.offset(), new_blocks,
-                            /*do_normalize=*/false);
-                }
-            }
-        }
-        return layout;
-    }
-
-    int ab_type_size(bool is_a) const {
-        auto ret = is_a ? cfg_.a_data_type_size : cfg_.b_data_type_size;
-        if (cfg_.is_s32_accumulator() && cfg_.fma_kind == fma_kind_t::mad) {
-            // s8/u8 is converted to dword-strided word for mad.
-            ir_assert(ret == 1);
-            ret = 4;
-        }
-        return ret;
-    }
-
-    int ab_tg_elems(bool is_a) const {
-        return is_a ? a_tg_elems_ : b_tg_elems_;
-    }
-
-    int ab_thr_elems(bool is_a) const {
-        return is_a ? a_thr_elems_ : b_thr_elems_;
-    }
-
-    int ab_sub_tile_elems(bool is_a) const {
-        return is_a ? a_sub_tile_elems_ : b_sub_tile_elems_;
-    }
-
-    int ab_use_slm(bool is_a) const {
-        return is_a ? cfg_.use_a_slm : cfg_.use_b_slm;
-    }
-
-    layout_t dummy_slm_layout(int size) const {
-        int inner_block = 16; // In bytes.
-        int outer_block = utils::div_up(size, inner_block);
-        std::vector<block_t> blocks;
-        blocks.emplace_back(0, inner_block, 1);
-        blocks.emplace_back(1, outer_block, inner_block);
-        blocks.emplace_back(0, 1, size);
-        blocks.emplace_back(1, 1, size);
-        return layout_t(type_t::byte(), 2, 0, blocks, /*do_normalize=*/false);
-    }
-
-    const conv_config_t &cfg_;
-
-    int reg_bytes_;
-    int tg_size_;
-    int m_tg_dim_;
-    int n_tg_dim_;
-    int a_tg_elems_;
-    int b_tg_elems_;
-    int a_thr_elems_;
-    int b_thr_elems_;
-    int c_thr_elems_;
-    int a_sub_tile_elems_;
-    int b_sub_tile_elems_;
-};
-
 int estimate_register_count(const conv_config_t &cfg) {
-    grf_usage_helper_t helper(cfg);
-    return helper.estimate();
+    return estimate_grf_usage(cfg).total();
 }
 
 } // namespace jit

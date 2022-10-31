@@ -14,8 +14,6 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include <CL/sycl.hpp>
-
 #include "oneapi/dnnl/dnnl_sycl.h"
 
 #include "common/c_types_map.hpp"
@@ -24,10 +22,12 @@
 #include "sycl/sycl_engine.hpp"
 #include "sycl/sycl_utils.hpp"
 
-using namespace dnnl::impl;
+using dnnl::impl::engine_t;
+using dnnl::impl::status_t;
 
 status_t dnnl_sycl_interop_engine_create(
         engine_t **engine, const void *dev, const void *ctx) {
+    using namespace dnnl::impl;
     bool args_ok = !utils::any_null(engine, dev, ctx);
     if (!args_ok) return status::invalid_arguments;
 
@@ -56,6 +56,7 @@ status_t dnnl_sycl_interop_engine_create(
 }
 
 status_t dnnl_sycl_interop_engine_get_context(engine_t *engine, void **ctx) {
+    using namespace dnnl::impl;
     bool args_ok = true && !utils::any_null(ctx, engine)
             && engine->runtime_kind() == runtime_kind::sycl;
 
@@ -69,6 +70,7 @@ status_t dnnl_sycl_interop_engine_get_context(engine_t *engine, void **ctx) {
 }
 
 status_t dnnl_sycl_interop_engine_get_device(engine_t *engine, void **dev) {
+    using namespace dnnl::impl;
     bool args_ok = true && !utils::any_null(dev, engine)
             && engine->runtime_kind() == runtime_kind::sycl;
 

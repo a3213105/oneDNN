@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2021 Intel Corporation
+* Copyright 2016-2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,15 +17,14 @@
 #include "oneapi/dnnl/dnnl.h"
 
 #include "c_types_map.hpp"
-#include "nstl.hpp"
 
 #include "engine.hpp"
-#include "primitive.hpp"
-#include "primitive_desc.hpp"
+#include "primitive_desc_iface.hpp"
 
 using namespace dnnl::impl;
 using namespace dnnl::impl::status;
 
+/*
 dnnl_primitive_desc::dnnl_primitive_desc(
         const std::shared_ptr<primitive_desc_t> &pd, engine_t *engine)
     : pd_(pd), engine_(engine) {}
@@ -120,6 +119,9 @@ status_t dnnl_primitive_desc_get_attr(
     if (utils::any_null(primitive_desc_iface, attr)) return invalid_arguments;
 
     *attr = primitive_desc_iface->attr();
+*/
+status_t dnnl_primitive_desc_destroy(
+        primitive_desc_iface_t *primitive_desc_iface) {
+    delete primitive_desc_iface;
     return success;
 }
-// vim: et ts=4 sw=4 cindent cino+=l0,\:4,N-s

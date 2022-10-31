@@ -773,8 +773,10 @@ std::ostream &dump_global_params(std::ostream &s) {
     if (canonical || bench_mode != CORR) s << "--mode=" << bench_mode << " ";
     if (canonical || attr_same_pd_check != false)
         s << "--attr-same-pd-check=" << bool2str(attr_same_pd_check) << " ";
+#if defined(DNNL_WITH_SYCL) || DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
     if (canonical || memory_kind != default_memory_kind)
         s << "--memory-kind=" << memory_kind << " ";
+#endif
 
     return s;
 }
@@ -1469,6 +1471,7 @@ void update_cpu_ref_attrs(attr_t &attr, dnnl_data_type_t new_dt) {
         if (!e.is_binary_kind()) continue;
 
         e.binary.src1_dt = new_dt;
+        e.binary.tag = tag::abx; // Hardcoded in setup_binary_po as well.
     }
 }
 

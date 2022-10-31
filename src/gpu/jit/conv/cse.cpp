@@ -24,6 +24,8 @@
 #include <unordered_map>
 
 #include "gpu/jit/conv/builder_utils.hpp"
+#include "gpu/jit/conv/message_support.hpp"
+#include "gpu/jit/conv/register_allocator.hpp"
 #include "gpu/jit/conv/utils.hpp"
 
 namespace dnnl {
@@ -76,7 +78,10 @@ public:
 
     bool allocated() const { return allocated_; }
 
-    int size() const { return cse_expr_->cse_var.type().size(); }
+    int size() const {
+        return utils::rnd_up(
+                cse_expr_->cse_var.type().size(), reg_allocator_t::granularity);
+    }
 
     int cost() const { return cost_; }
 
@@ -156,8 +161,10 @@ public:
     }
 
     bool try_allocate(int size, int limit) {
-        if (usage_ + size > limit) return false;
-        propagate_usage_down(size);
+        const auto alloc_size
+                = utils::rnd_up(size, reg_allocator_t::granularity);
+        if (usage_ + alloc_size > limit) return false;
+        propagate_usage_down(alloc_size);
         if (parent_) parent_->propagate_usage_up(this);
         return true;
     }
@@ -227,7 +234,8 @@ private:
             if (alloc->kind == alloc_kind_t::grf)
                 obj_usage = utils::rnd_up(alloc->size, grf_size_);
         } else if (auto *let = obj.template as_ptr<let_t>()) {
-            obj_usage = let->var.type().size();
+            obj_usage = utils::rnd_up(
+                    let->var.type().size(), reg_allocator_t::granularity);
         }
 
         auto guard = grf_usage_guard(obj_usage);
@@ -706,7 +714,7 @@ stmt_t eliminate_common_subexprs_impl(const stmt_t &_stmt, cse_context_t &ctx,
     cse_visitor_t visitor(ctx);
     visitor.visit(stmt);
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(GEN_CONV_DEBUG)
     // Verify that collected IR paths are correct (cse_expr_t objects are
     // defined at those paths).
     cse_verifier_t verifier(ctx);
@@ -736,12 +744,13 @@ stmt_t eliminate_common_subexprs_impl(const stmt_t &_stmt, cse_context_t &ctx,
     return stmt;
 }
 
-stmt_t eliminate_common_subexprs(const stmt_t &_stmt, ir_context_t &ir_ctx,
-        int grf_size, int memory_usage_limit) {
+stmt_t eliminate_common_subexprs(
+        const stmt_t &_stmt, ir_context_t &ir_ctx, int memory_usage_limit) {
     trace_start();
     stmt_t stmt;
     cse_context_t cse_ctx(ir_ctx);
 
+    int grf_size = ir_ctx.hw_cfg().grf_size();
     stmt = eliminate_common_subexprs_impl(
             _stmt, cse_ctx, grf_size, memory_usage_limit, 0);
     // Retry if statement is empty, rely on the updated
@@ -750,8 +759,62 @@ stmt_t eliminate_common_subexprs(const stmt_t &_stmt, ir_context_t &ir_ctx,
         stmt = eliminate_common_subexprs_impl(
                 _stmt, cse_ctx, grf_size, memory_usage_limit, 1);
     }
-    trace_pass("eliminate_common_subexprs", stmt);
+    trace_pass("eliminate_common_subexprs", stmt, ir_ctx);
     return stmt;
+}
+
+class g2s_buf_visitor_t : public ir_visitor_t {
+public:
+    int g2s_buf_size() const {
+        int ret = 0;
+        for (auto &kv : g2s_bufs_) {
+            ir_assert(kv.second != 0);
+            ret += kv.second;
+        }
+        return ret;
+    }
+
+    void _visit(const alloc_t &obj) override {
+        ir_visitor_t::_visit(obj);
+        auto it = g2s_bufs_.find(obj.buf);
+        if (it != g2s_bufs_.end()) it->second = obj.size;
+    }
+
+    void _visit(const func_call_t &obj) override {
+        if (!in_g2s_) {
+            ir_visitor_t::_visit(obj);
+            return;
+        }
+        if (auto *func = obj.func.as_ptr<send_t>()) {
+            ir_assert(func->is_load()) << func;
+            auto &buf = send_t::arg_reg_buf(obj);
+            g2s_bufs_.emplace(get_base(buf), 0);
+        }
+        ir_visitor_t::_visit(obj);
+    }
+
+    void _visit(const stmt_group_t &obj) override {
+        bool is_g2s = obj.label == stmt_label_t::g2s_load();
+        if (is_g2s) in_g2s_ = true;
+        ir_visitor_t::_visit(obj);
+        if (is_g2s) in_g2s_ = false;
+    }
+
+private:
+    object_map_t<expr_t, int> g2s_bufs_;
+    bool in_g2s_ = false;
+};
+
+stmt_t eliminate_common_subexprs(
+        const stmt_t &_stmt, ir_context_t &ir_ctx, const conv_config_t &cfg) {
+    int grf_size = ir_ctx.hw_cfg().grf_size();
+    int memory_usage_limit = (cfg.regs() - cfg.reserved_regs) * grf_size;
+    if (cfg.gmem_bufs > 1) {
+        g2s_buf_visitor_t v;
+        v.visit(_stmt);
+        memory_usage_limit -= (cfg.gmem_bufs - 1) * v.g2s_buf_size();
+    }
+    return eliminate_common_subexprs(_stmt, ir_ctx, memory_usage_limit);
 }
 
 } // namespace jit

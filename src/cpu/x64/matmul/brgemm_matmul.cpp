@@ -72,7 +72,7 @@ status_t brgemm_matmul_t<isa>::pd_t::init(engine_t *engine) {
             = [&]() -> bool { return attr()->zero_points_.common(); };
 
     const bool problem_dt_correct = is_int8 || is_bf16 || is_f32;
-    bool ok = mayiuse(isa) && problem_dt_correct
+    bool ok = mayiuse(isa) && problem_dt_correct && !has_zero_dim_memory()
             && !has_runtime_dims_or_strides()
             && attr()->has_default_values(
                     primitive_attr_t::skip_mask_t::oscale_runtime
@@ -297,7 +297,7 @@ void brgemm_matmul_t<isa>::compute_kernel(
     const auto &post_ops_binary_rhs_arg_vec
             = brgmm_ctx.get_post_ops_binary_rhs_arg_vec();
     const bool post_ops_applicable = bgmmc.post_ops_applicable
-            && (bgmmc.nthr_k <= 1 || bgmmc.K_chunks == 1);
+            && (brgmm_ctx.get_num_threads_for_k() <= 1 || bgmmc.K_chunks == 1);
 
     if (gemm_batch > 0 && brg_ker_idx >= 0) {
         const auto brg_kernel = brg_kernels_[brg_ker_idx].get();

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2021 Intel Corporation
+* Copyright 2016-2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -216,6 +216,8 @@ status_t ref_pooling_fwd_t<src_type, dst_type, acc_type>::execute_forward(
 
     const bool is_max_pool = alg == alg_kind::pooling_max;
 
+    float base_res
+            = is_max_pool ? (float)numeric_limits<src_data_t>::lowest() : 0.f;
     using ker_t
             = std::function<void(float &, dim_t, dim_t, dim_t, dim_t, dim_t)>;
     ker_t kernel = is_max_pool ? (ker_t)ker_max : (ker_t)ker_avg;
@@ -391,6 +393,7 @@ status_t ref_pooling_bwd_t<data_type>::execute_backward(
 template struct ref_pooling_fwd_t<data_type::f32, data_type::f32, data_type::f32>;
 template struct ref_pooling_fwd_t<data_type::s32, data_type::s32, data_type::s32>;
 template struct ref_pooling_fwd_t<data_type::bf16, data_type::bf16, data_type::f32>;
+template struct ref_pooling_fwd_t<data_type::f16, data_type::f32>;
 template struct ref_pooling_fwd_t<data_type::s8, data_type::s8, data_type::s32>;
 template struct ref_pooling_fwd_t<data_type::u8, data_type::u8, data_type::s32>;
 template struct ref_pooling_fwd_t<data_type::s8, data_type::f32, data_type::f32>;
@@ -398,6 +401,7 @@ template struct ref_pooling_fwd_t<data_type::u8, data_type::f32, data_type::f32>
 
 template struct ref_pooling_bwd_t<data_type::f32>;
 template struct ref_pooling_bwd_t<data_type::bf16>;
+template struct ref_pooling_bwd_t<data_type::f16>;
 } // namespace cpu
 } // namespace impl
 } // namespace dnnl

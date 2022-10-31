@@ -191,7 +191,7 @@ status_t brdgmm_desc_init(brgemm_t *brg, cpu_isa_t isa,
     if (transA || layout != brgemm_row_major || alpha != 1.0f || beta != 0.f)
         return status::unimplemented;
 
-    brgemm_utils::init_brdgemm_conf(brg, type, dt_a, dt_b, layout, alpha, beta,
+    brgemm_utils::init_brdgmm_conf(brg, type, dt_a, dt_b, layout, alpha, beta,
             LDA, LDC, M, N, strides);
 
     const bool ldx_check = (LDA < N || LDC < N);
@@ -276,12 +276,18 @@ status_t brgemm_desc_set_postops(brgemm_t *brg, const primitive_attr_t *attr,
 
     const int binary_ind = post_ops.find(primitive_kind::binary);
     brg->with_binary = binary_ind != -1;
-    const cpu_isa_t isa = get_max_cpu_isa();
 
+    // NOTE: Using brg->isa_impl here is a bit dangerous as it can change before
+    //       kernel creation, so there is no gaurantee that the isa checked here
+    //       matches the isa used at kernel creation time. For now this can only
+    //       happen for bf32, where isa during this check is avx512_core and isa
+    //       at kernel creation time is avx512_core_amx_bf16. It just so happens
+    //       that the behavior of `post_ops_ok` is identical for those two isas,
+    //       but there is no gaurentee that will always be the case.
     if ((brg->with_binary && !dst_md)
             || !injector::post_ops_ok(
-                    post_ops_ok_args_t(isa, {sum, eltwise, binary}, post_ops,
-                            &dst_d, false /*sum_at_pos_0_only*/,
+                    post_ops_ok_args_t(brg->isa_impl, {sum, eltwise, binary},
+                            post_ops, &dst_d, false /*sum_at_pos_0_only*/,
                             false /*sum_requires_scale_one*/,
                             false /*sum_requires_zp_zero*/,
                             {broadcasting_strategy_t::per_oc,
@@ -496,7 +502,7 @@ status_t brgemm_init_tiles(const brgemm_t &brg, char palette[64]) {
             tc_configure_tile(
                     buff, brg.get_C_tensor(m, brg.ld_block2), Cr, Cc_t);
     }
-    buff->palette_id = amx::get_max_palette();
+    buff->palette_id = amx::get_target_palette();
 
     return status::success;
 }

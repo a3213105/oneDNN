@@ -74,6 +74,7 @@ private:
     reg64_t reg_relu_ns = r13;
     reg64_t reg_bcast_loop_work = aux1_reg_bcast_data;
     reg64_t reg_load_dim_tail_mask = aux_reg_load_data;
+    reg64_t reg_long_offt = reg_bcast_data;
 
     Xbyak::Zmm vreg_bcast = Xbyak::Zmm(31);
     Xbyak::Opmask k_load_dim_mask = Xbyak::Opmask(2);
@@ -83,7 +84,16 @@ private:
     constexpr static int reg_bcast_loop_work_offt = 0;
     constexpr static int reg_binary_post_op_acc_off = 1 * reg64_size_;
     constexpr static int reg_abi_param1_backup = 2 * reg64_size_;
-    constexpr static int stack_space_needed = 3 * reg64_size_;
+    constexpr static int reg_bcast_data_off = 3 * reg64_size_;
+    constexpr static int stack_space_needed = 4 * reg64_size_;
+
+    reg64_t reg_oc_off = abi_param1;
+    reg64_t reg_d_weights = imm_addr64;
+    reg64_t reg_d_bias = r13;
+    int base_post_ops_data_offset = 0;
+
+    Xbyak::Zmm zmm_d_weights = Xbyak::Zmm(31);
+    Xbyak::Zmm zmm_d_bias = Xbyak::Zmm(30);
 
     reg64_t reg_oc_off = abi_param1;
     reg64_t reg_d_weights = imm_addr64;

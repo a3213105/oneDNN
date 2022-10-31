@@ -40,6 +40,22 @@ using namespace nstl;
                          : (d).blk_off(__VA_ARGS__))
 
 template <cpu_isa_t isa>
+const float *jit_uni_x8s8s32x_convolution_fwd_t<isa>::adjust_oscales(
+        const memory_tracking::grantor_t &scratchpad,
+        const float *oscales) const {
+    auto loc_scales = scratchpad.template get<float>(key_conv_adjusted_scales);
+    int mask = pd()->attr()->output_scales_.mask_;
+    float factor = 1.f / pd()->jcp_.wei_adj_scale;
+    if (mask == 0) {
+        utils::array_set(loc_scales, oscales[0] * factor, 8);
+    } else {
+        for (dim_t c = 0; c < pd()->OC(); c++)
+            loc_scales[c] = oscales[c] * factor;
+    }
+    return loc_scales;
+}
+
+template <cpu_isa_t isa>
 status_t jit_uni_x8s8s32x_convolution_fwd_t<isa>::execute_forward_2d(
         const exec_ctx_t &ctx) const {
     const auto &jcp = pd()->jcp_;
@@ -72,20 +88,10 @@ status_t jit_uni_x8s8s32x_convolution_fwd_t<isa>::execute_forward_2d(
     assert(jcp.nb_oc % jcp.nb_oc_blocking == 0);
     assert(jcp.nb_ch % jcp.nb_ch_blocking == 0);
 
-    const float *oscales = pd()->attr()->output_scales_.scales_;
-    if (jcp.signed_input && (!jcp.has_vnni)) {
-        auto local_scales = ctx.get_scratchpad_grantor().template get<float>(
-                key_conv_adjusted_scales);
-        size_t count = pd()->attr()->output_scales_.count_;
-        float factor = 1.f / pd()->jcp_.wei_adj_scale;
-        if (count == 1) {
-            utils::array_set(local_scales, oscales[0] * factor, 8);
-        } else {
-            for (size_t c = 0; c < count; c++)
-                local_scales[c] = oscales[c] * factor;
-        }
-        oscales = local_scales;
-    }
+    DEFINE_SCALES_BUFFER(oscales);
+
+    if (jcp.signed_input && (!jcp.has_vnni))
+        oscales = adjust_oscales(ctx.get_scratchpad_grantor(), oscales);
 
     size_t offset = weights_d.size() - weights_d.additional_buffer_size();
     auto w = const_cast<char *>(weights);
@@ -254,20 +260,10 @@ status_t jit_uni_x8s8s32x_convolution_fwd_t<isa>::execute_forward_1d(
     assert(jcp.nb_oc % jcp.nb_oc_blocking == 0);
     assert(jcp.nb_ch % jcp.nb_ch_blocking == 0);
 
-    const float *oscales = pd()->attr()->output_scales_.scales_;
-    if (jcp.signed_input && (!jcp.has_vnni)) {
-        auto local_scales = ctx.get_scratchpad_grantor().template get<float>(
-                key_conv_adjusted_scales);
-        size_t count = pd()->attr()->output_scales_.count_;
-        float factor = 1.f / pd()->jcp_.wei_adj_scale;
-        if (count == 1) {
-            utils::array_set(local_scales, oscales[0] * factor, 8);
-        } else {
-            for (size_t c = 0; c < count; c++)
-                local_scales[c] = oscales[c] * factor;
-        }
-        oscales = local_scales;
-    }
+    DEFINE_SCALES_BUFFER(oscales);
+
+    if (jcp.signed_input && (!jcp.has_vnni))
+        oscales = adjust_oscales(ctx.get_scratchpad_grantor(), oscales);
 
     size_t extra_data_offset
             = weights_d.size() - weights_d.additional_buffer_size();
@@ -406,20 +402,10 @@ status_t jit_uni_x8s8s32x_convolution_fwd_t<isa>::execute_forward_2d_dw(
     assert(jcp.nb_oc_blocking == 1);
     assert(jcp.nb_ch % jcp.nb_ch_blocking == 0);
 
-    const float *oscales = pd()->attr()->output_scales_.scales_;
-    if (jcp.signed_input && (!jcp.has_vnni)) {
-        auto local_scales = ctx.get_scratchpad_grantor().template get<float>(
-                key_conv_adjusted_scales);
-        size_t count = pd()->attr()->output_scales_.count_;
-        float factor = 1.f / pd()->jcp_.wei_adj_scale;
-        if (count == 1) {
-            utils::array_set(local_scales, oscales[0] * factor, 8);
-        } else {
-            for (size_t c = 0; c < count; c++)
-                local_scales[c] = oscales[c] * factor;
-        }
-        oscales = local_scales;
-    }
+    DEFINE_SCALES_BUFFER(oscales);
+
+    if (jcp.signed_input && (!jcp.has_vnni))
+        oscales = adjust_oscales(ctx.get_scratchpad_grantor(), oscales);
 
     size_t offset = weights_d.size() - weights_d.additional_buffer_size();
     auto w = const_cast<char *>(weights);
@@ -536,20 +522,10 @@ status_t jit_uni_x8s8s32x_convolution_fwd_t<isa>::execute_forward_3d(
     assert(jcp.nb_oc % jcp.nb_oc_blocking == 0);
     assert(jcp.nb_ch % jcp.nb_ch_blocking == 0);
 
-    const float *oscales = pd()->attr()->output_scales_.scales_;
-    if (jcp.signed_input && (!jcp.has_vnni)) {
-        auto local_scales = ctx.get_scratchpad_grantor().template get<float>(
-                key_conv_adjusted_scales);
-        size_t count = pd()->attr()->output_scales_.count_;
-        float factor = 1.f / pd()->jcp_.wei_adj_scale;
-        if (count == 1) {
-            utils::array_set(local_scales, oscales[0] * factor, 8);
-        } else {
-            for (size_t c = 0; c < count; c++)
-                local_scales[c] = oscales[c] * factor;
-        }
-        oscales = local_scales;
-    }
+    DEFINE_SCALES_BUFFER(oscales);
+
+    if (jcp.signed_input && (!jcp.has_vnni))
+        oscales = adjust_oscales(ctx.get_scratchpad_grantor(), oscales);
 
     size_t offset = weights_d.size() - weights_d.additional_buffer_size();
     auto w = const_cast<char *>(weights);

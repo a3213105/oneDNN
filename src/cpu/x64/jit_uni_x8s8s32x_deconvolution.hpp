@@ -194,7 +194,7 @@ struct jit_uni_x8s8s32x_deconvolution_fwd_t : public primitive_t {
         using cpu_deconvolution_fwd_pd_t::cpu_deconvolution_fwd_pd_t;
 
         DECLARE_COMMON_PD_T(
-                JIT_IMPL_NAME_HELPER("jit_uni_deconv:",
+                JIT_IMPL_NAME_HELPER("jit_uni_int8:",
                         isa == avx2 && jcp_.has_vnni ? avx2_vnni : isa, ""),
                 jit_uni_x8s8s32x_deconvolution_fwd_t);
 
@@ -213,6 +213,8 @@ private:
     status_t execute_forward_2d(const exec_ctx_t &ctx) const;
     status_t execute_forward_3d(const exec_ctx_t &ctx) const;
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
+    const float *adjust_oscales(const memory_tracking::grantor_t &scratchpad,
+            const float *oscales) const;
     std::unique_ptr<jit_uni_x8s8s32x_deconv_fwd_kernel<isa>> kernel_;
     std::unique_ptr<zp::jit_uni_deconv_zp_pad_str_kernel_base_t>
             zp_src_pad_comp_kernel_;

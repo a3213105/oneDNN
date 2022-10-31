@@ -372,6 +372,17 @@ private:
     }
 };
 
+struct serialization_stream_t;
+
+struct primitive_attr_item_t {
+    virtual std::unique_ptr<primitive_attr_item_t> clone() const = 0;
+    virtual bool has_default_values() const = 0;
+    virtual bool is_equal(const primitive_attr_item_t &other) const = 0;
+    virtual size_t get_hash() const = 0;
+    virtual void serialize(serialization_stream_t &stream) const = 0;
+    virtual ~primitive_attr_item_t() = default;
+};
+
 struct legacy_zero_points_t : public c_compatible {
     bool operator==(const legacy_zero_points_t &rhs) const {
         return count_ == rhs.count_ && mask_ == rhs.mask_;
@@ -808,6 +819,7 @@ struct dnnl_primitive_attr : public dnnl::impl::c_compatible {
         CHECK(rnn_weights_projection_qparams_.copy_from(
                 other.rnn_weights_projection_qparams_));
         CHECK(rnn_tparams_.copy_from(other.rnn_tparams_));
+        if (other.gpu_attr_) gpu_attr_ = other.gpu_attr_->clone();
         input_zero_points_ = (other.input_zero_points_);
         weights_zero_points_ = (other.weights_zero_points_);
         output_compensations_ = (other.output_compensations_);
@@ -831,9 +843,10 @@ struct dnnl_primitive_attr : public dnnl::impl::c_compatible {
         rnn_tparams = 1u << 9,
         sum_dt = 1u << 10,
         rnn_weights_projection_qparams = 1u << 11,
-        input_zero_points = 1 << 12,
-        weights_zero_points = 1 << 13,
-        output_compensations = 1 << 14
+        gpu_attr = 1u << 12,
+        input_zero_points = 1 << 13,
+        weights_zero_points = 1 << 14,
+        output_compensations = 1 << 15,
     };
 
     /** Returns true if the attributes have default values.
@@ -856,6 +869,9 @@ struct dnnl_primitive_attr : public dnnl::impl::c_compatible {
                 && rnn_weights_projection_qparams_
                         == rhs.rnn_weights_projection_qparams_
                 && rnn_tparams_ == rhs.rnn_tparams_
+                && ((gpu_attr_ && rhs.gpu_attr_
+                            && gpu_attr_->is_equal(*rhs.gpu_attr_))
+                        || (!gpu_attr_ && !rhs.gpu_attr_))
                 && input_zero_points_ == rhs.input_zero_points_
                 && weights_zero_points_ == rhs.weights_zero_points_
                 && output_compensations_ == rhs.output_compensations_;
@@ -866,6 +882,8 @@ struct dnnl_primitive_attr : public dnnl::impl::c_compatible {
     dnnl::impl::status_t set_scratchpad_mode(
             dnnl::impl::scratchpad_mode_t scratchpad_mode);
     dnnl::impl::status_t set_post_ops(const dnnl::impl::post_ops_t &post_ops);
+    dnnl::impl::status_t set_gpu_attr(
+            const dnnl::impl::primitive_attr_item_t &gpu_attr);
     dnnl::impl::status_t set_default_formats(
             const dnnl::impl::memory_desc_t *dst_md);
 
@@ -887,6 +905,7 @@ struct dnnl_primitive_attr : public dnnl::impl::c_compatible {
                     return is_fpsubtype(data_type::tf32, dt_to);
                 default: return false;
             }
+	    return false;
         };
         return is_compat && can_downconvert();
     }
@@ -902,6 +921,11 @@ struct dnnl_primitive_attr : public dnnl::impl::c_compatible {
     dnnl::impl::scales_t rnn_weights_qparams_;
     dnnl::impl::scales_t rnn_weights_projection_qparams_;
     dnnl::impl::rnn_tparams_t rnn_tparams_;
+    std::unique_ptr<dnnl::impl::primitive_attr_item_t> gpu_attr_;
+
+    dnnl::impl::legacy_zero_points_t input_zero_points_;
+    dnnl::impl::legacy_zero_points_t weights_zero_points_;
+    dnnl::impl::legacy_zero_points_t output_compensations_;
 
     dnnl::impl::legacy_zero_points_t input_zero_points_;
     dnnl::impl::legacy_zero_points_t weights_zero_points_;

@@ -22,6 +22,7 @@
 #include "gpu/jit/conv/bank_conflict_allocation.hpp"
 #include "gpu/jit/conv/config.hpp"
 #include "gpu/jit/conv/fma_support.hpp"
+#include "gpu/jit/conv/grf_usage.hpp"
 #include "gpu/jit/conv/ir.hpp"
 #include "gpu/jit/conv/kernel_builder.hpp"
 #include "gpu/jit/conv/kernel_info.hpp"
@@ -1009,6 +1010,15 @@ public:
         }
     }
 
+    void ecmp(const ngen::InstructionModifier &mod, const ngen_operand_t &dst,
+            const ngen_operand_t &src0, const ngen_operand_t &src1) {
+        if (src1.is_reg_data()) {
+            cmp(mod, dst.reg_data(), src0.reg_data(), src1.reg_data());
+        } else {
+            cmp(mod, dst.reg_data(), src0.reg_data(), src1.immediate());
+        }
+    }
+
     void eand(const ngen::InstructionModifier &mod, const ngen_operand_t &dst,
             const ngen_operand_t &src0, const ngen_operand_t &src1) {
         if (src1.is_reg_data()) {
@@ -1520,6 +1530,9 @@ public:
             return;
         }
 
+        if (try_region_peephole(obj)) return;
+        if (try_packed_int_peephole(obj)) return;
+
         // tuples: <offset, length, idx>
         std::vector<std::tuple<int, int, int>> chunks;
         for (int i = 0; i < elems; i++) {
@@ -1528,100 +1541,6 @@ public:
                 chunks.emplace_back(i, 1, idx);
             } else {
                 std::get<1>(chunks.back())++;
-            }
-        }
-
-        do {
-            auto diff = [](const ngen::RegData &rd0, const ngen::RegData &rd1) {
-                return ((rd1.getByteOffset() - rd0.getByteOffset())
-                        + (rd1.getBase() - rd0.getBase()) * 32);
-            };
-            bool ok_scalar = (elems % 2) == 0;
-            bool ok_vector = (elems % 2) == 0;
-            for (int i = 0; (ok_scalar || ok_vector) && (i < elems / 2); i++) {
-                ok_scalar &= (obj.idx[i] == 0) && (obj.idx[i + elems / 2] == 1);
-                ok_vector &= (i == 0) || (obj.idx[i] == obj.idx[i - 1] + 1);
-                ok_vector &= (obj.idx[i] == obj.idx[i + elems / 2]);
-            }
-            auto scalar1 = eval(obj.vec[1]);
-            auto scalar0 = eval(obj.vec[0]);
-            if (!scalar1.is_reg_buf_data() || !scalar0.is_reg_buf_data()
-                    || (!ok_scalar && !ok_vector))
-                break;
-            auto &rd1 = scalar1.reg_buf_data().reg_data();
-            auto &rd0 = scalar0.reg_buf_data().reg_data();
-            auto vd = diff(rd0, rd1) / rd1.getBytes();
-            if (ok_scalar) {
-                if ((rd1.getBytes() == rd0.getBytes()) && (vd * 2 == elems)) {
-                    const_cast<ngen::RegData &>(rd0).setRegion(vd, vd, 0);
-                    bind(obj, scalar0);
-                    return;
-                }
-            } else if (ok_vector) {
-                for (int i = 2; ok_vector && (i < elems / 2); i++) {
-                    auto scalar1 = eval(obj.vec[i]);
-                    auto scalar0 = eval(obj.vec[i - 1]);
-                    auto &rd1 = scalar1.reg_buf_data().reg_data();
-                    auto &rd0 = scalar0.reg_buf_data().reg_data();
-                    ok_vector &= (rd1.getBytes() == rd0.getBytes())
-                            && (diff(rd0, rd1) / rd1.getBytes() == vd);
-                }
-                if (ok_vector && (rd1.getBytes() == rd0.getBytes())
-                        && (elems * vd * rd1.getBytes() <= 64)) {
-                    const_cast<ngen::RegData &>(rd0).setRegion(
-                            0, elems / 2, vd);
-                    bind(obj, scalar0);
-                    return;
-                }
-            }
-        } while (false);
-
-        auto is_int_imm = [](const shuffle_t &s) {
-            bool retn = true;
-            for (const auto &v : s.vec)
-                retn &= v.is<int_imm_t>();
-            return retn;
-        };
-        if (((obj.elems() == 8) || (obj.elems() == 16)) && obj.type.is_x32()
-                && !is_const_broadcast(obj) && is_int_imm(obj)) {
-            std::vector<int> vec(obj.vec.size(), to_cpp<int>(obj.vec[0]));
-            int imin = vec[0], imax = vec[0];
-            for (int i = 1; i < int(vec.size()); i++) {
-                vec[i] = to_cpp<int>(obj.vec[i]);
-                imin = std::min(imin, vec[i]);
-                imax = std::max(imax, vec[i]);
-            }
-            int mul = utils::div_up(imax - imin + 1, 16);
-            for (int i = 1; mul && (i < int(vec.size())); i++)
-                if ((vec[i - 1] - vec[i]) % mul != 0) mul = 0;
-            if (mul) {
-                for (auto &v : vec)
-                    v = (v - imin) / mul;
-                auto dst = alloc_dst_op(obj);
-                const auto off = obj.elems() * dst.reg_data().getHS() * 4 - 32;
-                for (int i = 0; i < obj.elems(); i += 8) {
-                    auto fmt = dst.reg_buf_data().format(
-                            off + i * 2, ngen::DataType::w, 8, 1);
-                    auto chunk = ngen_operand_t(fmt, 8);
-                    host_->emov(chunk.mod(), chunk,
-                            ngen::Immediate::uv(vec[obj.idx[i + 0]],
-                                    vec[obj.idx[i + 1]], vec[obj.idx[i + 2]],
-                                    vec[obj.idx[i + 3]], vec[obj.idx[i + 4]],
-                                    vec[obj.idx[i + 5]], vec[obj.idx[i + 6]],
-                                    vec[obj.idx[i + 7]]));
-                }
-                auto fmt = dst.reg_buf_data().format(
-                        off, ngen::DataType::w, obj.elems(), 1);
-                auto src = ngen_operand_t(fmt, obj.elems());
-                if (mul > 1) {
-                    host_->emul(dst.mod(), dst.reg_data(), src.reg_data(), mul);
-                    src = dst;
-                }
-                if ((mul == 1) || (imin != 0))
-                    host_->eadd(
-                            dst.mod(), dst.reg_data(), src.reg_data(), imin);
-                bind(obj, dst);
-                return;
             }
         }
 
@@ -1668,7 +1587,9 @@ public:
 
     void _visit(const unary_op_t &obj) override {
         ir_assert(obj.op_kind == op_kind_t::_minus);
-        auto a_op = eval(obj.a);
+        ngen_operand_t a_op;
+        a_op = try_process_negated_flags(obj);
+        if (a_op.is_invalid()) a_op = eval(obj.a);
         bind(obj, -a_op);
     }
 
@@ -1692,11 +1613,6 @@ private:
         }
         expr_binding_.bind_dst(e, op);
         return op;
-    }
-
-    ngen_operand_t alloc_tmp(const expr_t &e) {
-        return ngen_operand_t(
-                scope_.alloc_reg_data(e.type()), e.type().elems());
     }
 
     // Pre-allocates a strided register region for expression `e` if needed.
@@ -1781,6 +1697,225 @@ private:
                 ir_error_not_expected()
                         << "Unknown kind: " << to_string(obj.op_kind);
         }
+    }
+
+    struct conjunct_t {
+        conjunct_t(op_kind_t op, ngen_operand_t a, ngen_operand_t b)
+            : op_(op), a_(std::move(a)), b_(std::move(b)) {}
+        op_kind_t op_;
+        ngen_operand_t a_, b_;
+    };
+
+    void split_by_and(const expr_t &e, std::vector<conjunct_t> &cv, type_t ty) {
+        if (auto bin = e.as_ptr<binary_op_t>()) {
+            if (bin->op_kind == op_kind_t::_and) {
+                split_by_and(bin->a, cv, ty);
+                split_by_and(bin->b, cv, ty);
+            } else
+                cv.emplace_back(bin->op_kind, eval(bin->a), eval(bin->b));
+        } else {
+            auto cast = cast_t::make(ty, e);
+            cv.emplace_back(op_kind_t::undef, eval(cast), ngen_operand_t());
+        }
+    }
+
+    ngen_operand_t try_process_negated_flags(const expr_t &e) {
+        ngen_operand_t retn;
+        auto cast = e.as<unary_op_t>().a.as_ptr<cast_t>();
+        if (cast && cast->expr.type().is_bool()) {
+            ngen_operand_t flags(scope_.alloc_flag(), e.type().elems());
+            retn = alloc_dst_op(e);
+            auto mod = retn.mod();
+            auto ar_op = [&](ngen::InstructionModifier m, const conjunct_t &c) {
+                if (c.op_ != op_kind_t::undef)
+                    host_->ecmp(m | cmp_op_to_ngen(c.op_), retn, c.a_, c.b_);
+                else
+                    host_->emov(m, retn, -c.a_);
+            };
+            std::vector<conjunct_t> cv;
+            split_by_and(cast->expr, cv, cast->type);
+            ar_op(mod, cv[0]);
+            mod |= flags.flag_register();
+            for (int i = 1; i < int(cv.size()); i++)
+                ar_op(mod, cv[i]);
+            retn = -retn;
+        }
+        return retn;
+    }
+
+    bool try_region_peephole(const shuffle_t &obj) {
+        int elems = obj.elems();
+        if (elems % 2 != 0) return false;
+
+        std::vector<ngen_operand_t> vec(obj.vec.size());
+        ngen::DataType data_type = ngen::DataType::invalid;
+        for (size_t i = 0; i < vec.size(); i++) {
+            if (!obj.vec[i].is<load_t>()) return false;
+            vec[i] = eval(obj.vec[i]);
+            ir_assert(vec[i].is_reg_buf_data()) << obj.vec[i];
+            auto &rbd = vec[i].reg_buf_data();
+            if (data_type == ngen::DataType::invalid) {
+                data_type = rbd.type();
+                continue;
+            }
+            if (data_type != rbd.type()) return false;
+        }
+
+        int grf_size = ngen::GRF::bytes(hw);
+        auto diff_bytes = [&](const ngen_operand_t &a,
+                                  const ngen_operand_t &b) {
+            auto a_rd = a.reg_data();
+            auto b_rd = b.reg_data();
+            int a_off = a_rd.getBase() * grf_size + a_rd.getByteOffset();
+            int b_off = b_rd.getBase() * grf_size + b_rd.getByteOffset();
+            return b_off - a_off;
+        };
+
+        int type_size = ngen::getBytes(data_type);
+        int stride_bytes = diff_bytes(vec[0], vec[1]);
+        if (stride_bytes < 0 || stride_bytes % type_size != 0) return false;
+
+        // Pattern 1: [xxyy]
+        auto is_xxyy = [&]() {
+            for (int i = 0; i < elems / 2; i++) {
+                if (obj.idx[i] != 0) return false;
+                if (obj.idx[i + elems / 2] != 1) return false;
+            }
+            return true;
+        };
+        if (is_xxyy()) {
+            auto &rbd = vec[0].reg_buf_data();
+            auto rd = rbd.reg_data();
+            int regs = utils::div_up(stride_bytes * 2, grf_size);
+            if (regs > 2) return false;
+            rd.setRegion(stride_bytes / type_size, elems / 2, 0);
+            reg_buf_t rb(hw, ngen::GRFRange(rd.getBase(), regs));
+            bind(obj, reg_buf_data_t(rb, rd));
+            return true;
+        }
+
+        // Pattern 2: [xyxy]
+        auto is_xyxy = [&]() {
+            for (int i = 0; i < elems / 2; i++) {
+                if (obj.idx[i] != i) return false;
+                if (obj.idx[i] != obj.idx[i + elems / 2]) return false;
+                if (i > 0 && diff_bytes(vec[i - 1], vec[i]) != stride_bytes)
+                    return false;
+            }
+            return true;
+        };
+        if (is_xyxy()) {
+            auto &rbd = vec[0].reg_buf_data();
+            auto rd = rbd.reg_data();
+            int regs = utils::div_up(stride_bytes * elems / 2, grf_size);
+            if (regs > 2) return false;
+            rd.setRegion(0, elems / 2, stride_bytes / type_size);
+            reg_buf_t rb(hw, ngen::GRFRange(rd.getBase(), regs));
+            bind(obj, reg_buf_data_t(rb, rd));
+            return true;
+        }
+
+        return false;
+    }
+
+    bool try_packed_int_peephole(const shuffle_t &obj) {
+        if (!obj.type.is_x32()) return false;
+        if (!utils::one_of(obj.elems(), 8, 16)) return false;
+
+        int64_t int_min = std::numeric_limits<int>::min();
+        int64_t int_max = std::numeric_limits<int>::max();
+        int vec_size = (int)obj.vec.size();
+        std::vector<int> vec(vec_size);
+        for (int i = 0; i < vec_size; i++) {
+            if (!is_const(obj.vec[i])) return false;
+            int value = to_cpp<int64_t>(obj.vec[i]);
+            if (value < int_min || value > int_max) return false;
+            vec[i] = (int)value;
+        }
+
+        const int esize = 8;
+
+        auto half_same = [&](int off) {
+            return std::equal(obj.idx.begin() + off + 1,
+                    obj.idx.begin() + off + esize, obj.idx.begin() + off);
+        };
+        // If true, the case is too trivial for :v/:uv to justify the overhead
+        if (half_same(0) && half_same(esize % obj.elems())) return false;
+
+        int vec_min = *std::min_element(vec.begin(), vec.end());
+        int vec_max = *std::max_element(vec.begin(), vec.end());
+
+        int factor = vec_max - vec_min;
+        for (int i = 0; i < vec_size; i++)
+            factor = math::gcd(vec[i] - vec_min, factor);
+
+        // XXX: Disabled due to an emulation limitation: vector multiplication
+        // by dword constant is not implemented yet.
+        int64_t s16_min = std::numeric_limits<int16_t>::min();
+        int64_t s16_max = std::numeric_limits<int16_t>::max();
+        if (factor < s16_min || factor > s16_max) return false;
+
+        auto check_range = [&](int f, int m, int a, int b) {
+            for (int i = 0; i < vec_size; i++) {
+                int d = (vec[i] - m) / f;
+                if (d < a || d > b) return false;
+            }
+            return true;
+        };
+
+        bool use_uv = false, use_v = false;
+        for (int f : {1, factor, -factor}) {
+            use_uv = check_range(f, vec_min, 0, 15);
+            use_v = check_range(f, vec_min, -8, 7);
+            if (use_uv || use_v) {
+                factor = f;
+                break;
+            }
+        }
+        if (!use_uv && !use_v) return false;
+        if (vec_min % factor == 0) {
+            bool new_use_uv = check_range(factor, 0, 0, 15);
+            bool new_use_v = check_range(factor, 0, -8, 7);
+            if (new_use_uv || new_use_v) {
+                vec_min = 0;
+                use_uv = new_use_uv;
+                use_v = new_use_v;
+            }
+        }
+
+        auto set_packed = [](uint32_t &packed, int8_t value, int idx) {
+            uint32_t v = (value >= 0 ? value : ((value & 0x7) | 0x8));
+            packed = packed | (v << idx * 4);
+        };
+
+        auto dst = alloc_dst_op(obj);
+        auto &dst_rbd = dst.reg_buf_data();
+        int dst_stride = dst_rbd.hs();
+        // no more than 1 temporary register is going to be required
+        auto storage = scope_.alloc_reg_buf_data(1);
+
+        auto w_type = (use_uv) ? ngen::DataType::uw : ngen::DataType::w;
+        for (int i = 0; i < obj.elems(); i += esize) {
+            uint32_t packed = 0;
+            for (int j = 0; j < esize; j++)
+                set_packed(packed, (vec[obj.idx[i + j]] - vec_min) / factor, j);
+            auto tmp = storage.format(i * sizeof(uint16_t), w_type, esize);
+            host_->emov(esize, tmp,
+                    (use_uv) ? ngen::Immediate::uv(packed)
+                             : ngen::Immediate::v(packed));
+        }
+        auto d = dst_rbd.format(
+                0, ngen::DataType::invalid, obj.elems(), dst_stride);
+        auto tmp = storage.format(0, w_type, obj.elems());
+        if (factor != 1) {
+            host_->emul(obj.elems(), d, tmp, ngen::Immediate(factor));
+        }
+        if (factor == 1 || vec_min != 0) {
+            host_->eadd(obj.elems(), d, (factor == 1) ? tmp : d,
+                    ngen::Immediate(vec_min));
+        }
+        bind(obj, dst);
+        return true;
     }
 
     ir_kernel_t<hw> *host_;
@@ -1928,8 +2063,7 @@ private:
                 host->store.ugm(mod, *lsc_spec, host->A64, header, data);
             } else if (send_.is_atomic()) {
                 *lsc_spec |= ngen::CacheSettingsLSC::L1UC_L3WB;
-                host->atomic.ugm(ngen::AtomicOp::fadd, mod,
-                        ngen::scattered(ngen::DataSizeLSC::D32, 1),
+                host->atomic.ugm(ngen::AtomicOp::fadd, mod, *lsc_spec,
                         to_address_base(send_.address, surf_bti), header, data);
             }
         } else {
@@ -1971,6 +2105,8 @@ private:
                     return std::make_pair(ngen::DataSizeLSC::D16U32, 1);
                 if (type.elems() == 4)
                     return std::make_pair(ngen::DataSizeLSC::D32, 1);
+                if (type.elems() == 8)
+                    return std::make_pair(ngen::DataSizeLSC::D64, 1);
                 break;
             }
             case 2: {
@@ -1978,6 +2114,8 @@ private:
                     return std::make_pair(ngen::DataSizeLSC::D16U32, 1);
                 if (type.elems() == 2)
                     return std::make_pair(ngen::DataSizeLSC::D32, 1);
+                if (type.elems() == 4)
+                    return std::make_pair(ngen::DataSizeLSC::D64, 1);
                 break;
             }
             case 4: return std::make_pair(ngen::DataSizeLSC::D32, type.elems());
@@ -2211,6 +2349,7 @@ private:
             int max_stride = int(last.stride * last.block);
             if (last.stride > 4) return false;
             if ((int)last.stride == 4 && type.size() <= 2) return false;
+            if (!math::is_pow2(last.stride)) return false;
             int max_stride_bytes = max_stride * type.size();
             int grf_size = ngen::GRF::bytes(hw);
             if (max_stride_bytes > 2 * grf_size) return false;
@@ -2327,6 +2466,8 @@ private:
         std::vector<edge_t> edges;
         for (int a = 1; a <= tile_a; a *= 2) {
             for (int b = 1; b <= tile_b; b *= 2) {
+                if (src.dim(0) % a != 0) continue;
+                if (src.dim(1) % b != 0) continue;
                 int idx = int(edges.size());
                 edges.emplace_back(idx, a, b);
             }
@@ -2804,8 +2945,9 @@ private:
                 src, dst, max_elems_per_thr, /*match_outer=*/true);
 
         if (tile.is_empty()) return false;
-
         elems_per_thr = tile.elems();
+        if (!math::is_pow2(elems_per_thr)) return false;
+
         int bytes_per_thr = elems_per_thr * type_size;
         if (bytes_per_thr % hword_bytes != 0) return false;
         if (bytes_per_thr < min_bytes_per_thr) return false;
@@ -3571,8 +3713,7 @@ public:
             if (all_of(mask, expr_t(false))) {
                 if (send_func.is_load() || send_func.is_load_2d()) {
                     auto reg_buf_op = eval(send_t::arg_reg_buf(args), scope);
-                    zero_out_data_payload(send_func, send_func.nmasks(),
-                            reg_buf_op.reg_buf_data());
+                    zero_out_data_payload(send_func, reg_buf_op.reg_buf_data());
                 }
                 return;
             }
@@ -3928,37 +4069,17 @@ private:
                 host_, scope, src_op.reg_buf_data(), dst_op.reg_buf_data());
     }
 
-    void zero_out_data_payload(const send_t &send_func,
-            const ngen::InstructionModifier &_mod, const reg_buf_data_t &rd) {
-        bool is_per_slot = (send_func.nmasks() > 1);
-
-        auto get_modifier = [&](int exec_size) {
-            if (is_per_slot) {
-                ir_assert(_mod.getExecSize() == exec_size);
-                auto mod = _mod;
-                mod = ~mod;
-                mod.setSWSB({});
-                return mod;
-            }
-            return ngen::InstructionModifier(exec_size);
-        };
-
-        int ud_size = sizeof(uint32_t);
+    void zero_out_data_payload(
+            const send_t &send_func, const reg_buf_data_t &rd) {
+        type_t type = type_t::f32();
         int send_size = send_func.payload_size();
         int grf_size = ngen::GRF::bytes(hw);
-        int step = (is_per_slot ? send_func.nmasks() * ud_size : 2 * grf_size);
+        int step = 2 * grf_size;
         for (int i = 0; i < send_size; i += step) {
-            int exec_size;
-            if (is_per_slot) {
-                exec_size = send_func.nmasks();
-            } else {
-                exec_size = std::min(step, send_size - i) / ud_size;
-            }
-            auto sub_rd_mov
-                    = rd.format(i, ngen::DataType::f, exec_size).reg_data();
+            int exec_size = std::min(step, send_size - i) / type.size();
+            auto sub_rd_mov = rd.format(i, to_ngen(type), exec_size).reg_data();
             ir_assert(math::is_pow2(exec_size));
-            host_->emov(
-                    get_modifier(exec_size), sub_rd_mov, ngen::Immediate(0.0f));
+            host_->emov(exec_size, sub_rd_mov, ngen::Immediate(0.0f));
         }
     }
 
@@ -3995,7 +4116,7 @@ private:
         // Zero-out inactive channels.
         if ((send_func.is_load() || send_func.is_load_2d())
                 && mod.getPredCtrl() != ngen::PredCtrl::None) {
-            zero_out_data_payload(send_func, mod, reg_buf_op.reg_buf_data());
+            zero_out_data_payload(send_func, reg_buf_op.reg_buf_data());
         }
 
         // Emit send instruction.
@@ -4162,16 +4283,7 @@ conv_kernel_t<hw>::conv_kernel_t(const conv_config_t &cfg,
 
 #ifdef GEN_CONV_DEBUG
     profile.stop();
-    int grf_size = ngen::GRF::bytes(hw);
-    ir_trace() << "Register usage estimate:         "
-               << cfg_.estimated_peak_grf_usage << std::endl;
-    ir_trace() << "IR register usage:               "
-               << get_peak_grf_usage(body, grf_size, ra_.get_grf_usage())
-               << std::endl;
-    ir_trace() << "IR register usage (without let): "
-               << get_peak_grf_usage(body, grf_size, ra_.get_grf_usage(),
-                          /*skip_let=*/true)
-               << std::endl;
+    verify_grf_usage(cfg, body, ra_.get_grf_usage());
     profile.start();
 #endif
 
@@ -4183,8 +4295,10 @@ conv_kernel_t<hw>::conv_kernel_t(const conv_config_t &cfg,
     generate_epilogue();
     profile.stop("Epilogue");
 
-#ifdef GEN_CONV_DEBUG
+#ifdef GEN_CONV_PROFILE
     ir_perf_no_trace() << profile << "\n";
+#endif
+#ifdef GEN_CONV_DEBUG
     ir_trace() << "Actual register usage:           "
                << ra_.get_peak_grf_usage() << std::endl;
     if (ra_.get_peak_grf_usage() > cfg_.estimated_peak_grf_usage) {

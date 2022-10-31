@@ -180,16 +180,19 @@ struct vreg_traits {};
 
 template <>
 struct vreg_traits<Xbyak::Zmm> {
+    typedef Xbyak::Ymm Vmm_lower_t;
     static constexpr size_t vlen = 64;
 };
 
 template <>
 struct vreg_traits<Xbyak::Ymm> {
+    typedef Xbyak::Xmm Vmm_lower_t;
     static constexpr size_t vlen = 32;
 };
 
 template <>
 struct vreg_traits<Xbyak::Xmm> {
+    typedef Xbyak::Xmm Vmm_lower_t;
     static constexpr size_t vlen = 16;
 };
 
@@ -297,7 +300,10 @@ inline const Xbyak::util::Cpu &cpu() {
 
 namespace amx {
 
-int get_max_palette();
+// Return the target palette for AMX instructions. Currently this is `0` if AMX
+// instructions are not supported, and `1` if they are.
+int get_target_palette();
+
 int get_max_tiles(int palette);
 int get_max_column_bytes(int palette);
 int get_max_rows(int palette);

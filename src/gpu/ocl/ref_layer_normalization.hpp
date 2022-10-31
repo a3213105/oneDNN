@@ -67,6 +67,8 @@ struct ref_layer_normalization_fwd_t : public gpu_primitive_t {
     };
 
     status_t init(engine_t *engine) override {
+        if (pd()->has_zero_dim_memory()) return status::success;
+
         compute::kernel_ctx_t kernel_ctx;
 
         status_t status = pd()->init_kernel_ctx(kernel_ctx);
@@ -100,16 +102,19 @@ struct ref_layer_normalization_bwd_t : public gpu_primitive_t {
         status_t init(engine_t *engine) {
             using namespace data_type;
 
-            auto src_data_t = src_md()->data_type;
-            auto diff_dst_data_t = diff_dst_md()->data_type;
+            auto src_dt = src_md()->data_type;
+            auto diff_dst_dt = diff_dst_md()->data_type;
+            auto diff_src_dt = diff_src_md()->data_type;
 
             bool ok = is_bwd()
-                    && (utils::everyone_is(f32, src_data_t, diff_dst_data_t)
+                    && (utils::everyone_is(
+                                f32, src_dt, diff_dst_dt, diff_src_dt)
                             || utils::everyone_is(
-                                    bf16, src_data_t, diff_dst_data_t))
+                                    bf16, src_dt, diff_dst_dt, diff_src_dt))
+                    && stat_md()->data_type == f32
                     && check_scale_shift_data_type()
-                    && set_default_formats_common()
-                    && attr()->has_default_values();
+                    && attr()->has_default_values()
+                    && set_default_formats_common();
             if (!ok) return status::unimplemented;
 
             CHECK(init_conf(engine));
@@ -125,6 +130,8 @@ struct ref_layer_normalization_bwd_t : public gpu_primitive_t {
     };
 
     status_t init(engine_t *engine) override {
+        if (pd()->has_zero_dim_memory()) return status::success;
+
         compute::kernel_ctx_t kernel_ctx;
 
         status_t status = pd()->init_kernel_ctx(kernel_ctx);

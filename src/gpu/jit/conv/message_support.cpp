@@ -24,6 +24,22 @@ namespace impl {
 namespace gpu {
 namespace jit {
 
+std::ostream &operator<<(std::ostream &out, const send_op_t op) {
+    const char *s = nullptr;
+    switch (op) {
+        case send_op_t::atomic_fadd: s = "atomic_fadd"; break;
+        case send_op_t::load: s = "load"; break;
+        case send_op_t::load_2d: s = "load_2d"; break;
+        case send_op_t::prefetch: s = "prefetch"; break;
+        case send_op_t::prefetch_2d: s = "prefetch_2d"; break;
+        case send_op_t::store: s = "store"; break;
+        case send_op_t::store_2d: s = "store_2d"; break;
+        default: ir_error_not_expected(); s = "unknown";
+    }
+
+    return out << s;
+}
+
 stmt_t send_t::create_offset_store(const expr_t &header_buf,
         const expr_t &mem_buf, const expr_t &_mem_off,
         bool is_signed_offset) const {
@@ -79,11 +95,6 @@ bool send_t::is_supported() const {
     // No hword stores before XeHPC.
     if (is_store() && type.is_hword() && !is_xe_hpc_plus()) return false;
 
-    // Enable qword for scalar f64
-    if (type.is_qword()
-            && (!is_xe_hp_plus() || slots != 1 || type.elems() != 1))
-        return false;
-
     // XXX: Half-GRF stores result in correctness issues on XeHPC.
     if (is_store() && is_block() && is_xe_hpc_plus()
             && type.size() % grf_size() != 0)
@@ -92,13 +103,14 @@ bool send_t::is_supported() const {
     // Skip transposing messages, they need additional logic in message
     // decomposition to handle layouts.
     if (type.is_dword() && type.elems() != 1) return false;
+    if (type.is_qword() && type.elems() != 1) return false;
 
     // XXX: Allow only hword x {1,2,4,8} prefetch for now.
     if (is_prefetch() && !type.is_hword()) return false;
     if (is_prefetch() && type.elems() > 8) return false;
 
     // Expect only float atomics.
-    if (is_atomic() && !type.is_dword()) return false;
+    if (is_atomic() && !(type.is_dword() || type.is_qword())) return false;
 
     if (is_atomic() && !is_xe_hpc_plus() && is_a64() && slots > 8) return false;
 
@@ -106,7 +118,8 @@ bool send_t::is_supported() const {
     if (is_scattered() && !is_atomic() && !type.is_byte() && !type.is_qword())
         return false;
 
-    if (is_scattered() && !is_atomic() && !utils::one_of(type.elems(), 1, 2, 4))
+    if (is_scattered() && !is_atomic()
+            && !utils::one_of(type.elems(), 1, 2, 4, 8))
         return false;
 
     return true;
@@ -141,8 +154,10 @@ std::vector<func_t> send_t::get_all(ngen::HW hw, send_op_t op,
                 size_t b_sz = b.access_size();
                 // Put block messages first.
                 if (a.is_block() != b.is_block()) return a.is_block();
+                // Prefer messages with a smaller type as they have less strict
+                // alignment requirements.
                 if (a_sz == b_sz)
-                    return a.type.scalar().size() > b.type.scalar().size();
+                    return a.type.scalar().size() < b.type.scalar().size();
                 return a_sz > b_sz;
             });
 
@@ -413,12 +428,10 @@ private:
     int off_bytes_ = 0;
 };
 
-access_builder_t::access_builder_t(const hw_config_t &hw_cfg,
-        ir_context_t &ir_ctx, const constraint_set_t &cset,
-        const view_t &mem_view, const expr_t &mem_buf, const expr_t &reg_buf,
-        send_op_t send_op, send_address_t send_address, send_hint_t &send_hint)
-    : hw_cfg_(hw_cfg)
-    , cset_(&cset)
+access_builder_t::access_builder_t(ir_context_t &ir_ctx, const view_t &mem_view,
+        const expr_t &mem_buf, const expr_t &reg_buf, send_op_t send_op,
+        send_address_t send_address, send_hint_t &send_hint)
+    : ir_ctx_(&ir_ctx)
     , mem_view_(mem_view)
     , mem_buf_(mem_buf)
     , reg_buf_(reg_buf)
@@ -426,9 +439,11 @@ access_builder_t::access_builder_t(const hw_config_t &hw_cfg,
     , send_address_(send_address)
     , send_hint_(send_hint)
     , mem_type_(mem_view.type())
-    , mem_walker_(utils::make_unique<memory_walker_t>(cset, mem_view)) {
+    , mem_walker_(
+              utils::make_unique<memory_walker_t>(ir_ctx.cset(), mem_view)) {
     if (send_hint_.hint_2d.enable) {
-        if (try_build_2d()) return;
+        // Do not emit non 2d prefetch when a 2d prefetch is expected
+        if (try_build_2d() || send_op_ == send_op_t::prefetch) return;
     }
     send_hint.hint_2d = send_2d_hint_t();
     build();
@@ -478,6 +493,7 @@ bool access_builder_t::try_build_2d() {
     // The data may be loaded in a wider data type to get a proper GRF layout.
     if (!hint.type.is_undef()) vlayout = vlayout.reinterpret(hint.type);
 
+    bool is_store = (send_op_ == send_op_t::store);
     auto send_type = type_t::u(vlayout.type().size() * 8);
     auto blocks = vlayout.blocks();
     if (blocks.size() < 2) return false;
@@ -536,7 +552,6 @@ bool access_builder_t::try_build_2d() {
     int type_factor = ir_utils::safe_divide(send_type.size(), mem_type_.size());
     surface_width /= type_factor;
 
-    int grf_size = hw_cfg_.grf_size();
     int width = hint.width;
     int height = hint.height;
     int count = 1;
@@ -545,10 +560,10 @@ bool access_builder_t::try_build_2d() {
 
     // Try to reduce the number of messages by increasing count per message.
     int try_count = count * 2;
-    int max_count = transpose ? 1 : 4;
+    int max_count
+            = block_2d_max_count(is_store, transpose, width, mem_type_.size());
     while (try_count <= max_count) {
         if (b0.block % (try_count * width) != 0) break;
-        if (width * try_count * mem_type_.size() > 64) break;
         count = try_count;
         try_count *= 2;
     }
@@ -604,7 +619,7 @@ bool access_builder_t::try_build_2d() {
     }
 
     reg_layout_walker_
-            = utils::make_unique<layout_walker_t>(reg_layout_, grf_size);
+            = utils::make_unique<layout_walker_t>(reg_layout_, grf_size());
 
     // Update user hint.
     hint.type = send_type;
@@ -613,8 +628,9 @@ bool access_builder_t::try_build_2d() {
     hint.transpose = transpose;
     hint.width = w;
     hint.height = h;
-    auto _send = send_t::make_2d(hw_cfg_.hw(), send_hint_.convert(send_op_),
-            send_type, W, H, P, w, h, c, vnni, transpose);
+    auto _send = send_t::make_2d(ir_ctx_->hw_cfg().hw(),
+            send_hint_.convert(send_op_), send_type, W, H, P, w, h, c, vnni,
+            transpose);
     auto &send = _send.as<send_t>();
 
     stmt_ = stmt_t();
@@ -681,17 +697,22 @@ bool access_builder_t::try_build_2d() {
             }
         }
 
-        auto off
-                = simplify(mem_view_.tlayout().offset_in_bytes(tstart), *cset_);
+        auto off = simplify(
+                mem_view_.tlayout().offset_in_bytes(tstart), ir_ctx_->cset());
 
         // Check alignment requirements.
-        int64_t align = get_max_const_factor(off, *cset_);
-        if (align % block_2d_base_alignment(hw_cfg_) != 0) {
+        int64_t align = get_max_const_factor(off, ir_ctx_->cset());
+        if (align % block_2d_base_alignment(ir_ctx_->hw_cfg()) != 0) {
             ok = false;
             return;
         }
 
         if (!skip_send) {
+            if (!ir_ctx_->cset().can_prove(
+                        x % block_2d_x_alignment(send_type.size()) == 0)) {
+                ok = false;
+                return;
+            }
             auto reg_buf = (send.is_prefetch_2d()
                             ? expr_t()
                             : reg_buf_ + reg_layout_walker_->offset_bytes());
@@ -711,7 +732,8 @@ bool access_builder_t::fixup_send_2d_params(const type_t &send_type, bool vnni,
     int surface_width_size = W * send_type.size();
     auto whp_ok = [&]() {
         return block_2d_width_ok(W, send_type.size()) && block_2d_height_ok(H)
-                && block_2d_pitch_ok(hw_cfg_, P, send_type.size(), use_xy);
+                && block_2d_pitch_ok(
+                        ir_ctx_->hw_cfg(), P, send_type.size(), use_xy);
     };
 
     // No VNNI permute by default.
@@ -738,6 +760,10 @@ bool access_builder_t::fixup_send_2d_params(const type_t &send_type, bool vnni,
     int factor = 64 / surface_width_size;
     if (h % factor != 0) return false;
 
+    int max_count = block_2d_max_count(
+            send_op_ == send_op_t::store, transpose, w, send_type.size());
+    if (factor > max_count) return false;
+
     vnni_permute_factor = factor;
     W *= factor;
     P *= factor;
@@ -751,7 +777,7 @@ bool access_builder_t::check_2d_mask(const tensor_t &tile,
         bool use_virtual_surface, int w_dim_idx, int h_dim_idx,
         expr_t &mask) const {
     auto sub_view = mem_view_.create_sub_view(tile);
-    auto mask_tensor = sub_view.create_mask_tensor(*cset_);
+    auto mask_tensor = sub_view.create_mask_tensor(ir_ctx_->cset());
     mask = mask_tensor.to_expr(1);
     if (!mask.is_empty()) return true;
 
@@ -772,7 +798,7 @@ bool access_builder_t::check_2d_mask(const tensor_t &tile,
             }
         }
     }
-    mask_tensor = sub_view.create_mask_tensor(*cset_, tmask);
+    mask_tensor = sub_view.create_mask_tensor(ir_ctx_->cset(), tmask);
     mask = mask_tensor.to_expr(1);
     if (!mask.is_empty()) return true;
 
@@ -784,11 +810,10 @@ bool access_builder_t::try_build(const layout_t &try_layout) {
     int reg_stride
             = (try_layout_blocks.empty() ? 0
                                          : (int)try_layout_blocks[0].stride);
-    auto send_list
-            = send_t::get_all(hw_cfg_.hw(), send_op_, send_address_, mem_type_);
-    int grf_size = hw_cfg_.grf_size();
+    auto send_list = send_t::get_all(
+            ir_ctx_->hw_cfg().hw(), send_op_, send_address_, mem_type_);
     reg_layout_walker_
-            = utils::make_unique<layout_walker_t>(try_layout, grf_size);
+            = utils::make_unique<layout_walker_t>(try_layout, grf_size());
     stmt_ = stmt_t();
     mem_walker_->reset();
     // Iterate through the memory view, greedily select messages according to
@@ -861,7 +886,7 @@ std::vector<layout_t> access_builder_t::candidate_payload_layouts() const {
 
     auto &vblocks = vlayout.blocks();
     auto &tblocks = mem_view_.tlayout().blocks();
-    int grf_size = hw_cfg_.grf_size();
+    int grf_size = this->grf_size();
 
     // This is to support layouts that are half-GRF blocked (e.g. u8/s8 32c on
     // XeHPC). In this case we can pad the block to full register and apply GRF

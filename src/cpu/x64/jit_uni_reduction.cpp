@@ -22,6 +22,7 @@ namespace cpu {
 namespace x64 {
 
 static cpu_isa_t get_supported_isa() {
+    if (mayiuse(avx512_core_fp16)) return avx512_core_fp16;
     if (mayiuse(avx512_core_bf16)) return avx512_core_bf16;
     if (mayiuse(avx512_core)) return avx512_core;
     if (mayiuse(avx2)) return avx2;

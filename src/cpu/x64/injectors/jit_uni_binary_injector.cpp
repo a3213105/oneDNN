@@ -37,8 +37,11 @@ static bcast_set_t get_all_strategies_supported_by_injector() {
 }
 
 bool is_data_supported(cpu_isa_t isa, data_type_t data_type) {
-    return IMPLICATION(
-            data_type == data_type::bf16, is_superset(isa, avx512_core));
+    switch (data_type) {
+        case data_type::bf16: return is_superset(isa, avx512_core);
+        case data_type::f16: return is_superset(isa, avx512_core_fp16);
+        default: return true;
+    }
 }
 
 static bool src1_desc_layout_same_as_dst_d(
@@ -130,6 +133,22 @@ bool binary_args_matches_tag(format_tag_t tag, const post_ops_t &post_ops) {
                     return rhs_arg_d.matches_tag(tag);
                 }
                 return true;
+            });
+}
+
+bool any_binary_postop_rhs_non_scalar_broadcast(
+        const post_ops_t &post_ops, const memory_desc_wrapper &dst_d) {
+    return std::any_of(post_ops.entry_.cbegin(), post_ops.entry_.cend(),
+            [&](const post_ops_t::entry_t &entry) -> bool {
+                if (entry.is_binary()) {
+                    const auto bcast_type = get_rhs_arg_broadcasting_strategy(
+                            entry.binary.src1_desc, dst_d,
+                            get_all_strategies_supported_by_injector());
+                    return !utils::one_of(bcast_type,
+                            broadcasting_strategy_t::scalar,
+                            broadcasting_strategy_t::unsupported);
+                }
+                return false;
             });
 }
 
@@ -1513,9 +1532,7 @@ void jit_uni_binary_injector_t<isa, Vmm>::inject_binary(
             load_rhs(rhs_arg_data_type, tmp_vmm, rhs_addr, tail_load_mode,
                     with_tail);
 
-        if (rhs_arg_data_type != data_type::bf16
-                && rhs_arg_data_type != data_type::f32)
-            cvt_to_f32(tmp_vmm);
+        if (types::is_integral_dt(rhs_arg_data_type)) cvt_to_f32(tmp_vmm);
 
         execute_binary(alg, dst, dst, tmp_vmm);
     } else {
@@ -1600,6 +1617,9 @@ void jit_uni_binary_injector_t<isa, Vmm>::execute_broadcast_no_tail(
         case data_type::s8:
         case data_type::u8:
             execute_broadcast_s8u8_no_tail(data_type, tmp_vmm, rhs_addr);
+            break;
+        case data_type::f16:
+            host_->vcvtph2psx(tmp_vmm, host_->ptr_b[rhs_addr.getRegExp()]);
             break;
         case data_type::bf16:
             if (is_avx512_) {
@@ -1736,6 +1756,10 @@ void jit_uni_binary_injector_t<isa, Vmm>::execute_broadcast_tail_with_opmask(
             host_->uni_vpbroadcastd(tmp_vmm | tail_opmask | host_->T_z, xmm);
             break;
         }
+        case data_type::f16:
+            host_->vcvtph2psx(tmp_vmm | tail_opmask | host_->T_z,
+                    host_->ptr_b[rhs_addr.getRegExp()]);
+            break;
         case data_type::bf16:
             if (is_avx512_) {
                 host_->vpbroadcastw(tmp_vmm, rhs_addr);
@@ -2008,6 +2032,7 @@ void jit_uni_binary_injector_t<isa, Vmm>::load_rhs_no_tail(
         case data_type::u8:
             load_rhs_i8_no_tail(data_type, tmp_vmm, rhs_addr);
             break;
+        case data_type::f16: host_->vcvtph2psx(tmp_vmm, rhs_addr); break;
         case data_type::bf16:
             if (is_avx512_) {
                 host_->vpmovzxwd(tmp_vmm, rhs_addr);
@@ -2075,6 +2100,9 @@ void jit_uni_binary_injector_t<isa, Vmm>::load_rhs_tail_dynamically_with_opmask(
             break;
         case data_type::u8:
             host_->vpmovzxbd(tmp_vmm | tail_opmask | host_->T_z, rhs_addr);
+            break;
+        case data_type::f16:
+            host_->vcvtph2psx(tmp_vmm | tail_opmask | host_->T_z, rhs_addr);
             break;
         case data_type::bf16:
             if (is_avx512_) {

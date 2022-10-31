@@ -39,6 +39,7 @@ status_t serialize_desc(
         CASE(inner_product)
         CASE(gemm)
         CASE(layer_normalization)
+        CASE(layer_normalization_v2)
         CASE(logsoftmax)
         CASE(lrn)
         CASE(matmul)
@@ -113,9 +114,11 @@ void serialize_md(serialization_stream_t &sstream, const memory_desc_t &md) {
 
     if (md.extra.flags != dnnl_memory_extra_flag_none) {
         sstream.write(&md.extra.flags);
-        if (md.extra.flags
-                & (dnnl_memory_extra_flag_compensation_conv_s8s8
-                        | dnnl_memory_extra_flag_rnn_u8s8_compensation)) {
+        if ((md.extra.flags
+                    & (dnnl_memory_extra_flag_compensation_conv_s8s8
+                            | dnnl_memory_extra_flag_rnn_u8s8_compensation))
+                && !types::extra_flag_rnn_s8s8_compensation_is_set(
+                        md.extra.flags)) {
             sstream.write(&md.extra.compensation_mask);
         }
 
@@ -214,6 +217,12 @@ void serialize_attr(
         // rnn_weights_qparams: scales[:]
         sstream.write(attr.rnn_weights_qparams_.scales_,
                 attr.rnn_weights_qparams_.count_);
+    }
+    if (attr.gpu_attr_) {
+        attr.gpu_attr_->serialize(sstream);
+    } else {
+        int zero = 0;
+        sstream.write(&zero);
     }
 }
 
@@ -345,6 +354,16 @@ void serialize_desc(serialization_stream_t &sstream,
     sstream.write(&desc.layer_norm_epsilon);
     // Flags
     sstream.write(&desc.flags);
+}
+
+void serialize_desc(serialization_stream_t &sstream,
+        const layer_normalization_v2_desc_t &desc) {
+    const auto &v1_desc
+            = *reinterpret_cast<const layer_normalization_desc_t *>(&desc);
+    serialize_desc(sstream, v1_desc);
+    // Memory descriptors
+    serialize_md(sstream, desc.dst_desc);
+    serialize_md(sstream, desc.diff_dst_desc);
 }
 
 void serialize_desc(serialization_stream_t &sstream, const lrn_desc_t &desc) {

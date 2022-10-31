@@ -132,13 +132,8 @@ TEST_F(runtime_attr_test_t, TestConv) {
     CHECK_OK(convolution_forward::primitive_desc(op_d, eng));
     CHECK_OK(convolution_forward::primitive_desc(
             op_d, gen_attr_with_oscale(false), eng));
-    if (get_test_engine_kind() == engine::kind::gpu) {
-        CHECK_OK(convolution_forward::primitive_desc(
-                op_d, gen_attr_with_oscale(true), eng));
-    } else {
-        CHECK_UNIMPL(convolution_forward::primitive_desc(
-                op_d, gen_attr_with_oscale(true), eng));
-    }
+    CHECK_OK(convolution_forward::primitive_desc(
+            op_d, gen_attr_with_oscale(true), eng));
 
     for (auto arg :
             {DNNL_ARG_SRC, DNNL_ARG_WEIGHTS, DNNL_ARG_BIAS, DNNL_ARG_DST}) {
@@ -234,10 +229,18 @@ TEST_F(runtime_attr_test_t, TestLNorm) {
         layer_normalization_forward::desc op_d(
                 prop_kind::forward_inference, md, stat_md, 0.1f, flags);
         CHECK_OK(layer_normalization_forward::primitive_desc(op_d, eng));
-        CHECK_UNIMPL(layer_normalization_forward::primitive_desc(
-                op_d, gen_attr_with_oscale(false), eng));
-        CHECK_UNIMPL(layer_normalization_forward::primitive_desc(
-                op_d, gen_attr_with_oscale(true), eng));
+
+        if (get_test_engine_kind() == engine::kind::gpu) {
+            CHECK_UNIMPL(layer_normalization_forward::primitive_desc(
+                    op_d, gen_attr_with_oscale(false), eng));
+            CHECK_UNIMPL(layer_normalization_forward::primitive_desc(
+                    op_d, gen_attr_with_oscale(true), eng));
+        } else {
+            CHECK_OK(layer_normalization_forward::primitive_desc(
+                    op_d, gen_attr_with_oscale(false), eng));
+            CHECK_OK(layer_normalization_forward::primitive_desc(
+                    op_d, gen_attr_with_oscale(true), eng));
+        }
 
         for (auto arg : {DNNL_ARG_SRC, DNNL_ARG_MEAN, DNNL_ARG_VARIANCE,
                      DNNL_ARG_WEIGHTS, DNNL_ARG_BIAS, DNNL_ARG_DST}) {
@@ -452,7 +455,7 @@ TEST_F(runtime_attr_test_t, TestSoftmax_v2) {
     CHECK_OK(softmax_v2_forward::primitive_desc(op_d, eng));
     CHECK_OK(softmax_v2_forward::primitive_desc(
             op_d, gen_attr_with_oscale(false), eng));
-    CHECK_UNIMPL(softmax_v2_forward::primitive_desc(
+    CHECK_OK(softmax_v2_forward::primitive_desc(
             op_d, gen_attr_with_oscale(true), eng));
 
     for (auto arg : {DNNL_ARG_SRC, DNNL_ARG_DST}) {

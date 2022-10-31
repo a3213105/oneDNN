@@ -27,7 +27,7 @@ namespace gpu {
 namespace jit {
 
 // Trace for debugging purposes.
-#ifdef GEN_CONV_DEBUG
+#ifdef GEN_CONV_PROFILE
 ir_utils::debug_profiler_t &get_trace_profiler();
 inline void trace_start() {
     get_trace_profiler().start();
@@ -44,27 +44,30 @@ inline void trace_stop(const char *pass_name) {
 inline void trace_perf() {
     ir_perf() << get_trace_profiler() << std::endl;
 }
-inline void trace_pass(const char *pass_name, const stmt_t &stmt) {
-    trace_stop(pass_name);
-    ir_trace() << "=== After " << pass_name << std::endl;
-    ir_trace() << stmt << std::endl;
-}
 #else
 inline void trace_start() {};
 inline void trace_reset() {};
 inline void trace_stamp(const char *) {};
 inline void trace_stop(const char *) {};
 inline void trace_perf() {};
-inline void trace_pass(const char *pass_name, const stmt_t &stmt) {};
+#endif
+
+#if defined(GEN_CONV_PROFILE) || defined(GEN_CONV_DEBUG)
+void trace_pass(
+        const char *pass_name, const stmt_t &stmt, ir_context_t &ir_ctx);
+#else
+inline void trace_pass(
+        const char *pass_name, const stmt_t &stmt, ir_context_t &ir_ctx) {};
 #endif
 
 // Performs the following operation:
 //     buf = alpha * buf + beta
-stmt_t create_mul_add_stmt(ngen::HW hw, const expr_t &buf, int size,
+stmt_t create_mul_add_stmt(ir_context_t &ir_ctx, const expr_t &buf, int size,
         const type_t &type, float alpha, float beta);
 
-inline stmt_t create_zero_out_stmt(ngen::HW hw, const expr_t &buf, int size) {
-    return create_mul_add_stmt(hw, buf, size, type_t::f32(), 0, 0);
+inline stmt_t create_zero_out_stmt(
+        ir_context_t &ir_ctx, const expr_t &buf, int size) {
+    return create_mul_add_stmt(ir_ctx, buf, size, type_t::f32(), 0, 0);
 }
 
 } // namespace jit

@@ -52,7 +52,8 @@ public:
                 = min(rem_bmnk_dim_, prb_dims_[prb_dim_idx_]->max_dim(level_));
         int dim = compute_next_block(level_, prb_level_dim(), target_dim,
                 bmnk_dim_.base_iter_block(), rem_prb_dim_,
-                prb_dims_[prb_dim_idx_]->base_iter_block(), is_last_prb_dim());
+                prb_dims_[prb_dim_idx_]->base_iter_block(), is_last_prb_dim(),
+                prb_dims_[prb_dim_idx_]->pad_block());
         if (level_ == tile_level_t::iter) {
             ir_assert(dim % prb_dims_[prb_dim_idx_]->base_iter_block() == 0);
         }
@@ -156,13 +157,16 @@ private:
 
     int compute_next_block(tile_level_t level, int level_dim,
             dim_value_t target_dim, int target_base_blk, int dim,
-            int base_iter_block, bool is_last_dim,
+            int base_iter_block, bool is_last_dim, int pad_block,
             double target_eff = 0.75) const {
         if (target_dim.is_unlimited()) return dim;
 
         bool require_pow_2 = false;
         if (level == tile_level_t::tg) require_pow_2 = true;
-        if (level == tile_level_t::iter && utils::one_of(bmnk_dim_.bmnk(), 'N'))
+        if (level == tile_level_t::iter
+                && (bmnk_dim_.bmnk() == 'N'
+                        || (bmnk_dim_.bmnk() == 'M'
+                                && bmnk_dim_.inner_dims() == 1)))
             require_pow_2 = true;
 
         int step = 1;
@@ -194,6 +198,8 @@ private:
         if (ret == 0) ret = step;
         if (require_pow_2) ir_assert(math::is_pow2(ret));
         if (level == tile_level_t::iter) ir_assert(ret % base_iter_block == 0);
+        if (pad_block > ret && pad_block % ret != 0)
+            ret = math::gcd(pad_block, ret);
         return ret;
     }
 
@@ -470,6 +476,8 @@ void block_helper_t::init_bmnk_blocks() {
     }
 
     m_blk = compute_block(m_dim().size(), m_blk, m_dim().base_iter_block());
+    // Require pow2 when only one m dim is non-trivial
+    if (m_dim().inner_dims() == 1) m_blk = utils::rnd_down_pow2(m_blk);
     k_blk = compute_block(k_dim().size(), k_blk, k_dim().base_iter_block());
     bn_blk = compute_block(bn_dim.size(), bn_blk, bn_dim.base_iter_block());
 

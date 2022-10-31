@@ -23,14 +23,27 @@
 #include <vector>
 
 #include "common/optional.hpp"
+#include "gpu/jit/conv/hw_config.hpp"
 #include "gpu/jit/conv/ir_core.hpp"
+
 namespace dnnl {
 namespace impl {
 namespace gpu {
 namespace jit {
 
+class constraint_set_t;
+
 class ir_context_t {
 public:
+    ir_context_t(const hw_config_t &hw_cfg, constraint_set_t &cset)
+        : hw_cfg_(hw_cfg), cset_(cset) {}
+
+    const hw_config_t &hw_cfg() const { return hw_cfg_; }
+
+    const constraint_set_t &cset() { return cset_; }
+
+    void add_constraint(const expr_t &e);
+
     expr_t create_tmp_var(
             const type_t &type, const std::string &prefix = "tmp") {
         int &id = prefix_ids_[prefix];
@@ -40,6 +53,8 @@ public:
     }
 
 private:
+    hw_config_t hw_cfg_;
+    constraint_set_t &cset_;
     std::unordered_map<std::string, int> prefix_ids_;
 };
 
@@ -430,14 +445,44 @@ int get_peak_grf_usage(const stmt_t &stmt, int grf_size, int external_usage = 0,
         bool skip_let = false);
 
 struct mem_usage_guard_t {
-    mem_usage_guard_t(int *mem_usage, int size) : ptr(mem_usage), size(size) {
-        *ptr += size;
+    mem_usage_guard_t(int *usage, int *peak_usage, int size)
+        : usage(usage), peak_usage(peak_usage), size(size) {
+        if (usage) *usage += size;
+        if (usage && peak_usage) *peak_usage = std::max(*peak_usage, *usage);
     }
 
-    ~mem_usage_guard_t() { *ptr -= size; }
+    mem_usage_guard_t(int *usage, int size)
+        : mem_usage_guard_t(usage, nullptr, size) {}
 
-    int *ptr;
-    int size;
+    mem_usage_guard_t() : mem_usage_guard_t(nullptr, nullptr, 0) {}
+
+    mem_usage_guard_t(mem_usage_guard_t &&other)
+        : usage(other.usage), peak_usage(other.peak_usage), size(other.size) {
+        other.usage = nullptr;
+        other.peak_usage = nullptr;
+        size = 0;
+    }
+
+    mem_usage_guard_t &operator=(mem_usage_guard_t &&other) {
+        usage = other.usage;
+        peak_usage = other.peak_usage;
+        size = other.size;
+        other.usage = nullptr;
+        other.peak_usage = nullptr;
+        size = 0;
+        return *this;
+    }
+
+    mem_usage_guard_t(const mem_usage_guard_t &) = delete;
+    mem_usage_guard_t &operator=(const mem_usage_guard_t &) = delete;
+
+    ~mem_usage_guard_t() {
+        if (usage) *usage -= size;
+    }
+
+    int *usage {nullptr};
+    int *peak_usage {nullptr};
+    int size {0};
 };
 
 // Describes the linear transformation F(x) for variable x: F(x) = (a * x + b),

@@ -25,9 +25,8 @@
 #include <algorithm>
 #include <memory>
 #include <vector>
-#include <CL/sycl.hpp>
 
-using namespace cl::sycl;
+using namespace sycl;
 
 class neg_sign_kernel;
 class init_kernel;

@@ -47,10 +47,11 @@ arm_compute::DataType get_acl_data_t(
     }
 }
 
-arm_compute::ActivationLayerInfo convert_to_acl_act(
-        const alg_kind_t eltwise_alg, const float alpha, const float beta) {
-    using acl_act_t = arm_compute::ActivationLayerInfo::ActivationFunction;
-    acl_act_t acl_act_alg;
+status_t convert_to_acl_act(alg_kind_t eltwise_alg, float alpha, float beta,
+        arm_compute::ActivationLayerInfo &act_info) {
+
+    using namespace arm_compute;
+    using act_func = ActivationLayerInfo::ActivationFunction;
 
     switch (eltwise_alg) {
         case eltwise_relu:
@@ -58,56 +59,56 @@ arm_compute::ActivationLayerInfo convert_to_acl_act(
             // Compute Library defines LEAKY_RELU: f(x) = (x > 0) ? x : a*x
             // whilst Compute Library RELU is defined as: f(x) = max(0,x)
             if (alpha == 0) {
-                acl_act_alg = acl_act_t::RELU;
+                act_info = ActivationLayerInfo(act_func::RELU, alpha, beta);
             } else {
-                acl_act_alg = acl_act_t::LEAKY_RELU;
+                act_info = ActivationLayerInfo(
+                        act_func::LEAKY_RELU, alpha, beta);
             }
             break;
         case eltwise_tanh:
             // oneDNN defines TANH activation as:          f(x) = tanh(x)
             // Compute Library defines TANH activation as: f(x) = a*tanh(b*x)
             // Setting a=b=1 makes the two equivalent
-            return arm_compute::ActivationLayerInfo(acl_act_t::TANH, 1.f, 1.f);
+            act_info = ActivationLayerInfo(act_func::TANH, 1.f, 1.f);
             break;
-        case eltwise_elu: acl_act_alg = acl_act_t::ELU; break;
-        case eltwise_square: acl_act_alg = acl_act_t::SQUARE; break;
-        case eltwise_abs: acl_act_alg = acl_act_t::ABS; break;
-        case eltwise_sqrt: acl_act_alg = acl_act_t::SQRT; break;
-        case eltwise_linear: acl_act_alg = acl_act_t::LINEAR; break;
-        case eltwise_bounded_relu: acl_act_alg = acl_act_t::BOUNDED_RELU; break;
-        case eltwise_soft_relu: acl_act_alg = acl_act_t::SOFT_RELU; break;
-        case eltwise_logistic: acl_act_alg = acl_act_t::LOGISTIC; break;
-        default: return arm_compute::ActivationLayerInfo();
+        case eltwise_elu:
+            act_info = ActivationLayerInfo(act_func::ELU, alpha, beta);
+            break;
+        case eltwise_square:
+            act_info = ActivationLayerInfo(act_func::SQUARE, alpha, beta);
+            break;
+        case eltwise_abs:
+            act_info = ActivationLayerInfo(act_func::ABS, alpha, beta);
+            break;
+        case eltwise_sqrt:
+            act_info = ActivationLayerInfo(act_func::SQRT, alpha, beta);
+            break;
+        case eltwise_linear:
+            act_info = ActivationLayerInfo(act_func::LINEAR, alpha, beta);
+            break;
+        case eltwise_bounded_relu:
+            act_info = ActivationLayerInfo(act_func::BOUNDED_RELU, alpha, beta);
+            break;
+        case eltwise_soft_relu:
+            act_info = ActivationLayerInfo(act_func::SOFT_RELU, alpha, beta);
+            break;
+        case eltwise_logistic:
+            act_info = ActivationLayerInfo(act_func::LOGISTIC, alpha, beta);
+            break;
+        default: act_info = ActivationLayerInfo(); return status::unimplemented;
     }
 
-    return arm_compute::ActivationLayerInfo(acl_act_alg, alpha, beta);
+    return status::success;
 }
 
-arm_compute::ActivationLayerInfo get_acl_act(const primitive_attr_t &attr) {
-    const auto &post_ops = attr.post_ops_;
-    const int entry_idx = post_ops.find(primitive_kind::eltwise);
-    if (entry_idx == -1) { return arm_compute::ActivationLayerInfo(); }
-
-    const auto eltwise_alg = post_ops.entry_[entry_idx].eltwise.alg;
-    float alpha = post_ops.entry_[entry_idx].eltwise.alpha;
-    float beta = post_ops.entry_[entry_idx].eltwise.beta;
-
-    return convert_to_acl_act(eltwise_alg, alpha, beta);
+status_t convert_to_acl_act(
+        const eltwise_desc_t &ed, arm_compute::ActivationLayerInfo &act_info) {
+    return convert_to_acl_act(ed.alg_kind, ed.alpha, ed.beta, act_info);
 }
 
-arm_compute::ActivationLayerInfo get_acl_act(const eltwise_desc_t &ed) {
-    const alg_kind_t eltwise_alg = ed.alg_kind;
-    float alpha = ed.alpha;
-    float beta = ed.beta;
-
-    return convert_to_acl_act(eltwise_alg, alpha, beta);
-}
-
-bool acl_act_ok(alg_kind_t eltwise_activation) {
-    return utils::one_of(eltwise_activation, eltwise_relu, eltwise_tanh,
-            eltwise_elu, eltwise_square, eltwise_abs, eltwise_sqrt,
-            eltwise_linear, eltwise_bounded_relu, eltwise_soft_relu,
-            eltwise_logistic);
+status_t convert_to_acl_act(const post_ops_t::entry_t::eltwise_t &elt,
+        arm_compute::ActivationLayerInfo &act_info) {
+    return convert_to_acl_act(elt.alg, elt.alpha, elt.beta, act_info);
 }
 
 status_t tensor_info(arm_compute::TensorInfo &info, const memory_desc_t &md) {
@@ -202,9 +203,6 @@ int reorder_dimensions_by_stride(std::vector<memory_desc_t *> permuted_mds,
         // Number of dimensions must match and must be blocked
         if (md->ndims != ndims || md->format_kind != format_kind::blocked)
             return 0;
-
-        // Check all the dimensions are the same size
-        if (!utils::array_cmp(md->dims, mds[0]->dims, (size_t)ndims)) return 0;
     }
 
     int reordered_dims = 0;
@@ -213,29 +211,40 @@ int reorder_dimensions_by_stride(std::vector<memory_desc_t *> permuted_mds,
     std::vector<int> perm(ndims);
     std::iota(perm.begin(), perm.end(), 0);
 
-    // For each dimension d1, look for a dimension (d2) in which every md has
-    // the target stride. Target stride is initially 1 (i.e. dense) but will
-    // increase each time we find a dimension which matches.
-    dim_t target_stride = 1;
+    // For each dimension d1, find a dimension (d2) in which every md has the
+    // next smallest stride, then swap d2 into d1. Stride is initially 1 (i.e.
+    // dense) but will increase each time we find a dimension. The target
+    // strides may be different across dimensions if they are broadcasted.
+    std::vector<dim_t> next_smallest_stride(mds.size(), 1);
     for (dim_t d1 = ndims - 1; d1 >= 0; --d1) {
-        bool found_target = false;
+        bool found_swap = false;
         for (dim_t d2 = d1; d2 >= 0; --d2) {
-            found_target = std::all_of(
-                    mds.begin(), mds.end(), [=](const memory_desc_t *m) {
-                        return m->format_desc.blocking.strides[perm[d2]]
-                                == target_stride;
-                    });
-            if (found_target) {
-                // Multiply target stride by dimension
-                target_stride *= mds[0]->dims[perm[d2]];
-                // Swap the found dimension (d2) into d1
+            // Check that all mds have the right stride
+            found_swap = true;
+            for (size_t i = 0; i < mds.size(); i++) {
+                auto &md_strides = mds[i]->format_desc.blocking.strides;
+                // Either it is the next smallest stride, or the dimensions is 1
+                // so we can ignore it
+                bool can_swap = md_strides[perm[d2]] == next_smallest_stride[i]
+                        || mds[i]->dims[perm[d2]] == 1;
+                if (!can_swap) {
+                    found_swap = false;
+                    break;
+                }
+            }
+            if (found_swap) {
+                // Multiply next smallest strides by dimension we just found
+                for (size_t i = 0; i < mds.size(); i++)
+                    next_smallest_stride[i] *= mds[i]->dims[perm[d2]];
+
+                // Swap the found dimension (perm[d2]) into d1
                 nstl::swap(perm[d2], perm[d1]);
                 ++reordered_dims;
                 break;
             }
         }
-        // If we didn't find the target, we can't move onto the next dimension
-        if (!found_target) break;
+        // We didn't find a swap for this dimension, we can't continue
+        if (!found_swap) break;
     }
 
     // dnnl_memory_desc_permute_axes applies the inverse of the permutation

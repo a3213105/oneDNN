@@ -48,3 +48,6 @@
 
 # bf16
 --batch=test_concat_bfloat16
+
+# f16
+--batch=test_concat_float16

@@ -159,15 +159,28 @@ inline format_kind_t format_tag_to_kind(format_tag_t tag) {
     return format_kind::undef;
 }
 
+// Currently rnn_s8s8_compensation has common bits with rnn_u8s8_compensation
+// and scale_adjust constants so we have to perform additional checks to
+// separate these two cases
+inline bool extra_flag_rnn_s8s8_compensation_is_set(uint64_t flags) {
+    return ((flags & memory_extra_flags::rnn_s8s8_compensation)
+                   ^ memory_extra_flags::rnn_s8s8_compensation)
+            == 0;
+}
+
 inline bool memory_extra_desc_is_equal(
         const memory_extra_desc_t &lhs, const memory_extra_desc_t &rhs) {
     using namespace memory_extra_flags;
     return true && lhs.flags == rhs.flags
             && IMPLICATION(lhs.flags & compensation_conv_s8s8,
                     lhs.compensation_mask == rhs.compensation_mask)
-            && IMPLICATION(lhs.flags & rnn_u8s8_compensation,
+            && IMPLICATION((lhs.flags & rnn_u8s8_compensation)
+                            && !extra_flag_rnn_s8s8_compensation_is_set(
+                                    lhs.flags),
                     lhs.compensation_mask == rhs.compensation_mask)
-            && IMPLICATION(lhs.flags & scale_adjust,
+            && IMPLICATION((lhs.flags & scale_adjust)
+                            && !extra_flag_rnn_s8s8_compensation_is_set(
+                                    lhs.flags),
                     lhs.scale_adjust == rhs.scale_adjust)
             && IMPLICATION(lhs.flags & compensation_conv_asymmetric_src,
                     lhs.asymm_compensation_mask == rhs.asymm_compensation_mask);
@@ -270,6 +283,45 @@ inline data_type_t default_accum_data_type(data_type_t src_dt,
     if (one_of(f16, src_dt, wei_dt, dst_dt)) return f32;
 
     return data_type::undef;
+}
+
+inline bool is_integral_dt(data_type_t dt) {
+    using namespace data_type;
+    return utils::one_of(dt, s32, s8, u8);
+}
+
+template <typename data_t>
+inline void cvt_from_float(data_t *out, const float *inp, size_t nelems) {
+    assert(!"unimplemented");
+}
+
+template <typename data_t>
+inline void cvt_to_float(float *out, const data_t *inp, size_t nelems) {
+    assert(!"unimplemented");
+}
+
+template <>
+inline void cvt_from_float<bfloat16_t>(
+        bfloat16_t *out, const float *inp, size_t nelems) {
+    cvt_float_to_bfloat16(out, inp, nelems);
+}
+
+template <>
+inline void cvt_to_float<bfloat16_t>(
+        float *out, const bfloat16_t *inp, size_t nelems) {
+    cvt_bfloat16_to_float(out, inp, nelems);
+}
+
+template <>
+inline void cvt_from_float<float16_t>(
+        float16_t *out, const float *inp, size_t nelems) {
+    cvt_float_to_float16(out, inp, nelems);
+}
+
+template <>
+inline void cvt_to_float<float16_t>(
+        float *out, const float16_t *inp, size_t nelems) {
+    cvt_float16_to_float(out, inp, nelems);
 }
 
 } // namespace types
@@ -419,6 +471,17 @@ inline bool operator==(const layer_normalization_desc_t &lhs,
             && COMPARE_FLOAT_DESC_MEMBERS(layer_norm_epsilon)
             && COMPARE_DESC_MEMBERS(flags);
     return ret;
+}
+
+inline bool operator==(
+        const layer_normalization_v2_desc_t &lhs, const layer_normalization_v2_desc_t &rhs) {
+    const auto &v1_desc_lhs = *reinterpret_cast<const layer_normalization_desc_t *>(&lhs);
+    const auto &v1_desc_rhs = *reinterpret_cast<const layer_normalization_desc_t *>(&rhs);
+
+    bool ret = v1_desc_lhs == v1_desc_rhs
+            && COMPARE_DESC_MEMBERS(dst_desc)
+            && COMPARE_DESC_MEMBERS(diff_dst_desc);
+     return ret;
 }
 
 inline bool operator==(const lrn_desc_t &lhs, const lrn_desc_t &rhs) {
@@ -743,7 +806,9 @@ inline status_t memory_desc_init_by_blocking_desc(
     for (int _d = ndims - 1; _d >= 0; --_d) {
         const int d = perm[_d];
         md.format_desc.blocking.strides[d] = stride;
-        stride *= md.padded_dims[d] / blocks[d];
+        if (md.padded_dims[d] != 0) { // Keep same stride for zero dim
+            stride *= md.padded_dims[d] / blocks[d];
+        }
     }
 
     md.extra = utils::zero<memory_extra_desc_t>();
@@ -873,9 +938,16 @@ inline void copy_c_op_desc(op_desc_t *dst, const op_desc_t *src) {
         CASE_OP_DESC(eltwise);
         CASE_OP_DESC(gemm);
         CASE_OP_DESC(inner_product);
-        CASE_OP_DESC(layer_normalization);
-        CASE_OP_DESC(lrn);
-        CASE_OP_DESC(matmul);
+        case primitive_kind::layer_normalization: {
+            auto casted_dst_handle = (dnnl_layer_normalization_desc_t *)(dst);
+            auto casted_src_handle
+                    = (const dnnl_layer_normalization_desc_t *)(src);
+            *casted_dst_handle = *casted_src_handle;
+            break;
+        }
+            CASE_OP_DESC(layer_normalization_v2);
+            CASE_OP_DESC(lrn);
+            CASE_OP_DESC(matmul);
         case primitive_kind::pooling: {
             auto casted_dst_handle = (dnnl_pooling_desc_t *)(dst);
             auto casted_src_handle = (const dnnl_pooling_desc_t *)(src);

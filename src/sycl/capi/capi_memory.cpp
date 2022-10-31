@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2021 Intel Corporation
+* Copyright 2020-2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,6 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include <CL/sycl.hpp>
-
 #include "oneapi/dnnl/dnnl_sycl.h"
 
 #include "common/c_types_map.hpp"
@@ -27,13 +25,18 @@
 #include "sycl/sycl_engine.hpp"
 #include "sycl/sycl_memory_storage.hpp"
 
-using namespace dnnl::impl;
 using namespace dnnl::impl::sycl;
+
+using dnnl::impl::engine_t;
+using dnnl::impl::memory_desc_t;
+using dnnl::impl::memory_t;
+using dnnl::impl::status_t;
+using dnnl::impl::stream_t;
 
 status_t dnnl_sycl_interop_memory_create(memory_t **memory,
         const memory_desc_t *md, engine_t *engine, memory_kind_t memory_kind,
         void *handle) {
-    using namespace dnnl::impl::sycl;
+    using namespace dnnl::impl;
 
     bool ok = !utils::any_null(memory, md, engine)
             && engine->runtime_kind() == runtime_kind::sycl;
@@ -66,7 +69,7 @@ status_t dnnl_sycl_interop_memory_create(memory_t **memory,
 
 status_t dnnl_sycl_interop_memory_set_buffer(
         memory_t *memory, void *buffer, stream_t *stream) {
-    using namespace dnnl::impl::sycl;
+    using namespace dnnl::impl;
 
     bool ok = !utils::any_null(memory, buffer)
             && memory->engine()->runtime_kind() == runtime_kind::sycl;
@@ -88,7 +91,7 @@ status_t dnnl_sycl_interop_memory_set_buffer(
 
 status_t dnnl_sycl_interop_memory_get_memory_kind(
         const memory_t *memory, memory_kind_t *memory_kind) {
-    using namespace dnnl::impl::sycl;
+    using namespace dnnl::impl;
 
     bool ok = !utils::any_null(memory, memory_kind)
             && memory->engine()->runtime_kind() == runtime_kind::sycl;

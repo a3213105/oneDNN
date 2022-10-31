@@ -29,8 +29,12 @@ namespace jit {
 inline int block_2d_base_alignment(const hw_config_t &hw_cfg) {
     ir_assert(hw_cfg.hw() >= ngen::HW::XeHPC);
     // XXX: A steppings require 128 byte alignment due to a HW bug.
-    if (hw_cfg.stepping_id() < 5) return 128;
+    if (hw_cfg.stepping_id() <= 6) return 128;
     return 64;
+}
+
+inline int block_2d_x_alignment(int type_size) {
+    return std::max(4, type_size) / type_size;
 }
 
 inline bool block_2d_width_ok(int width, int type_size) {
@@ -56,6 +60,12 @@ inline bool block_2d_pitch_ok(const hw_config_t &hw_cfg, int pitch,
     if (use_xy && pitch_bytes % block_2d_base_alignment(hw_cfg) != 0)
         return false;
     return true;
+}
+
+inline int block_2d_max_count(
+        bool is_store, bool is_transpose, int block_width, int type_size) {
+    if (is_store || is_transpose) return 1;
+    return 64 / (block_width * type_size);
 }
 
 } // namespace jit

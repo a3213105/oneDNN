@@ -37,8 +37,8 @@ inline void write_vect_c_block_int(int idx, __global int *ptr, int c,
 #if IS_FWD
 KERNEL_ATTR
 __kernel void gen9_pooling_fwd(__global DATA_T *src, __global int *ws,
-        __global DATA_T *dst POST_OP_ARGS) {
-    const int mb = GWS_GET_MB();
+        __global DATA_T *dst, const int batch_id POST_OP_ARGS) {
+    const int mb = MB_BLOCK_SIZE * batch_id + GWS_GET_MB();
     const int c = GWS_GET_C();
     const int od = GWS_GET_OD();
     const int oh = GWS_GET_OH();
@@ -85,19 +85,21 @@ __kernel void gen9_pooling_fwd(__global DATA_T *src, __global int *ws,
     const int ih = oh * SH - PH;
     const int iw = ow * SW - PW;
 #if USE_FLOATS
-    VECT_FLOAT_T D0 = ALG_MAX ? DATA_MIN : DATA_ZERO;
-    VECT_FLOAT_T D1 = ALG_MAX ? DATA_MIN : DATA_ZERO;
+    // Convert DATA_MIN to float instead of using -FLT_MAX to avoid -inf
+    // Can use 0.0f safely, however
+    VECT_FLOAT_T D0 = ALG_MAX ? CONVERT_FLOAT_T(DATA_MIN) : 0.0f;
+    VECT_FLOAT_T D1 = ALG_MAX ? CONVERT_FLOAT_T(DATA_MIN) : 0.0f;
 #else // USE_FLOATS
     VECT_DATA_T D0 = ALG_MAX ? DATA_MIN : DATA_ZERO;
     VECT_DATA_T D1 = ALG_MAX ? DATA_MIN : DATA_ZERO;
 #endif // USE_FLOATS
     VECT_INT_T WS0 = 0, WS1 = 0;
 
-    for (int kd = 0; kd < KD; ++kd)
+    for (int kd = 0; kd < KD; ++kd) {
+        if (id + kd < 0 || id + kd >= ID) continue;
         for (int kh = 0; kh < KH; ++kh) {
+            if (ih + kh < 0 || ih + kh >= IH) continue;
             for (int kw = 0; kw < KW; ++kw) {
-                if (id + kd < 0 || id + kd >= ID) continue;
-                if (ih + kh < 0 || ih + kh >= IH) continue;
                 if (iw + kw < 0 || iw + kw >= IW) continue;
 
                 int src_off = SRC_OFF(mb, c, id + kd, ih + kh, iw + kw);
@@ -133,6 +135,7 @@ __kernel void gen9_pooling_fwd(__global DATA_T *src, __global int *ws,
 #endif // ALG_MAX
             }
         }
+    }
 
 #if ALG_AVG_P
     D0 = D0 / (KD * KH * KW);
@@ -264,17 +267,21 @@ __kernel void gen9_pooling_bwd(__global DATA_T *diff_src, __global int *ws,
 
     VECT_FLOAT_T S0 = 0, S1 = 0;
     for (int kd = 0; kd < KD; kd++) {
+        int od = (id + PD - kd);
+        if (od % SD != 0) continue;
+        od /= SD;
+        if (od < 0 || od >= OD) continue;
+
         for (int kh = 0; kh < KH; kh++) {
+            int oh = (ih + PH - kh);
+            if (oh % SH != 0) continue;
+            oh /= SH;
+            if (oh < 0 || oh >= OH) continue;
+
             for (int kw = 0; kw < KW; kw++) {
-                int od = (id + PD - kd);
-                int oh = (ih + PH - kh);
                 int ow = (iw + PW - kw);
-                if (od % SD != 0 || oh % SH != 0 || ow % SW != 0) continue;
-                od /= SD;
-                oh /= SH;
+                if (ow % SW != 0) continue;
                 ow /= SW;
-                if (od < 0 || od >= OD) continue;
-                if (oh < 0 || oh >= OH) continue;
                 if (ow < 0 || ow >= OW) continue;
 
                 const int dst_off = DST_OFF(mb, c, od, oh, ow);

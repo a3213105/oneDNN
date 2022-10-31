@@ -15,6 +15,7 @@
 *******************************************************************************/
 
 #include <float.h>
+#include <functional>
 #include <math.h>
 #include <random>
 #include <stdio.h>
@@ -202,7 +203,32 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
     skip_unimplemented_sum_po(prb->attr, res, prb->dst_dt());
 }
 
-void skip_invalid_prb(const prb_t *prb, res_t *res) {}
+void skip_invalid_prb(const prb_t *prb, res_t *res) {
+    const bool is_src_zp = !prb->attr.zero_points.is_def(DNNL_ARG_SRC);
+    const bool is_dst_zp = !prb->attr.zero_points.is_def(DNNL_ARG_DST);
+
+    // Only runtime zero points are supported by this driver
+    const bool is_runtime_src_zp = prb->attr.zero_points.runtime(DNNL_ARG_SRC);
+    const bool is_runtime_dst_zp = prb->attr.zero_points.runtime(DNNL_ARG_DST);
+    const bool is_static_zp = (is_src_zp && !is_runtime_src_zp)
+            || (is_dst_zp && !is_runtime_dst_zp);
+    if (is_static_zp) {
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
+        return;
+    }
+
+    // AMX kernel only supports SRC zero points in unrolled kernel,
+    // and only for values of 0 or 1.
+    // Note: this check must be done here due to the fact that zero point value
+    // in brgemm API is a runtime argument.
+    // TODO: remove once AMX kernel fully supports zero points.
+    const bool is_amx = dnnl::mayiuse(dnnl_cpu_isa_avx512_core_amx);
+    const int src_zp_value = prb->attr.zero_points.get(DNNL_ARG_SRC).value;
+    if (is_amx && is_src_zp && src_zp_value != 0 && src_zp_value != 1) {
+        res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED;
+        return;
+    }
+}
 
 void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
         const args_t &ref_args) {
@@ -212,10 +238,28 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
     cmp.set_zero_trust_percent(90.f); // TODO: why so bad filling?
 }
 
+// A special wrapper needed to match internal infrastructure.
+dnnl_status_t brgemm_kernel_execute_postops_wrapper(
+        const dnnl::impl::cpu::x64::brgemm_kernel_t *brgemm_kernel,
+        int batch_size,
+        const dnnl::impl::cpu::x64::brgemm_batch_element_t *batch_element,
+        void *acc_ptr, void *dst_ptr,
+        const dnnl::impl::cpu::x64::brgemm_post_ops_data_t &post_ops_data,
+        void *scratchpad_ptr, const dnnl_stream_t &stream,
+        const std::vector<dnnl_exec_arg_t> &dnnl_args) {
+    brgemm_kernel_execute_postops(brgemm_kernel, batch_size, batch_element,
+            acc_ptr, dst_ptr, post_ops_data, scratchpad_ptr);
+    return dnnl_success;
+}
+
 int doit(const prb_t *prb, res_t *res) {
     if (bench_mode == LIST) return res->state = LISTED, OK;
 
     skip_start(res);
+    if (res->state == SKIPPED) return OK;
+
+    // Need this here as brgemm has no primitive creation step
+    skip_invalid_prb(prb, res);
     if (res->state == SKIPPED) return OK;
 
     bool use_dst_as_acc = false;
@@ -298,11 +342,16 @@ int doit(const prb_t *prb, res_t *res) {
     // TODO: re-consider enabling isa values.
     const auto isa_any = cpu_isa_t::isa_any;
 
+    // Create BRGeMM descriptor, analogous to primitive descriptor creation
     const auto status_init = brgemm_desc_init(&brgemm_desc, isa_any, batch_kind,
             prb->src_dt(), prb->wei_dt(), false /* transA */,
             false /* transB */, layout, prb->alpha, prb->beta, prb->get_lda(),
             prb->get_ldb(), prb->get_ldc(use_dst_as_acc), prb->m, prb->n,
             prb->k, nullptr /* strides */);
+    check_dnnl_status(status_init, prb, res);
+    if (res->state == SKIPPED) return OK;
+    // Unconditionally skip remaining unimplemented cases.
+    // TODO: remove this and add a SAFE check above.
     if (status_init != dnnl_success)
         return res->state = SKIPPED, res->reason = CASE_NOT_SUPPORTED, OK;
 
@@ -311,14 +360,20 @@ int doit(const prb_t *prb, res_t *res) {
     auto dnnl_attr = make_benchdnn_dnnl_wrapper(
             create_dnnl_attr(prb->attr, attr_args));
 
-    DNN_SAFE(brgemm_desc_set_postops(&brgemm_desc, dnnl_attr, &dst_md,
-                     prb->get_ldd(), prb->bia_dt),
+    SAFE(check_dnnl_status(brgemm_desc_set_postops(&brgemm_desc, dnnl_attr,
+                                   &dst_md, prb->get_ldd(), prb->bia_dt),
+                 prb, res),
             WARN);
+    if (res->state == SKIPPED) return OK;
 
     brgemm_attr_t brgemm_attr;
     DNN_SAFE(brgemm_attr_init(&brgemm_attr, prb), WARN);
-    DNN_SAFE(brgemm_desc_set_attr(&brgemm_desc, brgemm_attr), WARN);
+    SAFE(check_dnnl_status(
+                 brgemm_desc_set_attr(&brgemm_desc, brgemm_attr), prb, res),
+            WARN);
+    if (res->state == SKIPPED) return OK;
 
+    // Create BRGeMM kernel, analogous to primitive creation
     brgemm_kernel_t *brgemm_kernel_;
     DNN_SAFE(brgemm_kernel_create(&brgemm_kernel_, brgemm_desc), WARN);
     auto brgemm_kernel = make_benchdnn_dnnl_wrapper(brgemm_kernel_);
@@ -487,6 +542,13 @@ int doit(const prb_t *prb, res_t *res) {
 
         check_correctness(prb, {DST}, args, ref_args, setup_cmp, res);
     }
+
+    // Create a bind to match internals to run performance measurements.
+    perf_function_t perf_func = std::bind(brgemm_kernel_execute_postops_wrapper,
+            brgemm_kernel_, prb->batch_size, v_batch_element.data(), acc_ptr,
+            dst_ptr, post_ops_data, scratchpad_ptr, std::placeholders::_1,
+            std::placeholders::_2);
+    measure_perf(res, perf_func, args);
 
     if (init_tile_status == dnnl_success) DNN_SAFE(amx_tile_release(), WARN);
 

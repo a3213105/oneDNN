@@ -52,8 +52,6 @@ status_t gemm_convolution_fwd_t::execute_forward_nspc(
     auto bia_base = CTX_IN_MEM(const data_t *, DNNL_ARG_BIAS);
     auto dst_base = CTX_OUT_MEM(data_t *, DNNL_ARG_DST);
 
-    auto MB = CTX_IN_BATCH(DNNL_ARG_SRC);
-
     const auto post_ops_binary_rhs_arg_vec
             = x64::binary_injector::prepare_binary_args(pd()->jcp_.post_ops, ctx);
 
@@ -63,7 +61,7 @@ status_t gemm_convolution_fwd_t::execute_forward_nspc(
 
     parallel(jcp.nthr, [&](const int ithr, const int nthr) {
         status_t st_thr = execute_forward_thr_nspc(ctx, ithr, nthr, src_base,
-                wei_base, bia_base, dst_base, scratchpad, MB, post_ops_binary_rhs_arg_vec);
+                wei_base, bia_base, dst_base, scratchpad, post_ops_binary_rhs_arg_vec);
         if (st_thr != status::success) st = st_thr;
     });
 
@@ -73,8 +71,7 @@ status_t gemm_convolution_fwd_t::execute_forward_nspc(
 status_t gemm_convolution_fwd_t::execute_forward_thr_nspc(const exec_ctx_t &ctx,
         const int ithr, const int nthr, const data_t *src_base,
         const data_t *wei_base, const data_t *bia_base, data_t *dst_base,
-        const memory_tracking::grantor_t &scratchpad, int MB,
-        const std::vector<const void *>& post_ops_binary_rhs_arg_vec) const {
+        const memory_tracking::grantor_t &scratchpad, const std::vector<const void *>& post_ops_binary_rhs_arg_vec) const {
     const conv_gemm_conf_t &jcp = pd()->jcp_;
 
     // Src Format: mb-spatial-groups-input_channels
@@ -104,6 +101,7 @@ status_t gemm_convolution_fwd_t::execute_forward_thr_nspc(const exec_ctx_t &ctx,
 
     const dim_t nb_oh = div_up(jcp.oh, jcp.oh_block);
     const dim_t nb_ow = div_up(jcp.ow, jcp.ow_block);
+    auto MB = CTX_IN_BATCH(DNNL_ARG_SRC);
     // threads share work across mini-batch, groups, and blocked width/height
     const dim_t work_amount = MB * jcp.ngroups * nb_oh * nb_ow;
     balance211(work_amount, nthr, ithr, start, end);

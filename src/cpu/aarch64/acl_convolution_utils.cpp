@@ -212,21 +212,6 @@ status_t acl_init_conf(acl_conv_conf_t &acp, memory_desc_t &src_md,
                 arm_compute::QuantizationInfo(1.0f / scales[0], 0));
     }
 
-    // Post-convolutional operations (post-ops)
-    const auto &post_ops = attr.post_ops_;
-    // is_eltwise(true) here stands for eltwise.scale == 1.f check
-    acp.sum_with_eltwise = (post_ops.len() == 2) && post_ops.entry_[0].is_sum()
-            && post_ops.entry_[1].is_eltwise(true);
-    acp.act_info = acl_utils::get_acl_act(attr);
-
-    if (acp.sum_with_eltwise) {
-        ACL_CHECK_VALID(arm_compute::NEActivationLayer::validate( // eltwise
-                &acp.dst_info, &acp.dst_info, acp.act_info));
-        ACL_CHECK_VALID(arm_compute::NEArithmeticAddition::validate( // sum
-                &acp.dst_info, &acp.dst_info, &acp.dst_info,
-                arm_compute::ConvertPolicy::SATURATE));
-    }
-
     return status::success;
 }
 
@@ -307,10 +292,17 @@ status_t init_conf_wino(acl_conv_conf_t &acp, memory_desc_t &src_md,
     // General Compute Library checks, memory tags are also set there
     CHECK(acl_init_conf(acp, src_md, weights_md, dst_md, bias_md, cd, attr));
 
-    const bool wino_shape_ok // unit strides only, no dilations
+    const bool shape_ok
+            // only unit strides allowed
             = (acp.padstride_info.stride() == std::pair<uint, uint> {1, 1})
+            // Note: Compute Library supports arbitrary padding for wino kernels
+            // but we only allow small padding to be consistent with oneDNN
+            && (acp.padstride_info.pad().first <= 1) // padding left/right
+            && (acp.padstride_info.pad().second <= 1) // padding top/bottom
+            // only non-dilated convolutions allowed
             && (acp.dilation_info == arm_compute::Size2D(1, 1));
-    if (!wino_shape_ok) return status::unimplemented;
+
+    ACL_CHECK_SUPPORT(!shape_ok, "shape not supported by winograd kernels");
 
     // clang-format off
     // Validate convolution manually to check for return status

@@ -266,10 +266,13 @@ int doit(const prb_t *prb, res_t *res) {
         dnn_mem_t &dst_fp = src_fp; // in-place reference
 
         SAFE(fill_data_fwd(prb, src_dt, src_fp), WARN);
+        dnn_mem_t scales;
+        maybe_prepare_runtime_scales(scales, prb->attr.oscale, 1, prb->scales);
 
         args.set(DNNL_ARG_SRC, src_dt);
         args.set(DNNL_ARG_DST, dst_dt);
         args.set(DNNL_ARG_SCRATCHPAD, scratchpad_dt);
+        args.set(DNNL_ARG_ATTR_OUTPUT_SCALES, scales);
 
         SAFE(execute_and_wait(prim, args, res), WARN);
 
