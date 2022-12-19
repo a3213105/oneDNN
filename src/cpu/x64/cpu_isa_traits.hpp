@@ -33,8 +33,10 @@
  * be obtained with mmap */
 //#define XBYAK_USE_MMAP_ALLOCATOR
 /* Use Xbyak's memfd-based allocation, if available */
-#define XBYAK_USE_MEMFD
-#ifndef DNNL_ENABLE_EXCEPTIONS
+/* @todo [fork] XBYAK_USE_MEMFD is disabled to get rid of segfaults and std::bad_alloc issues
+ * with kernel memory allocations. The exact root cause should be analysed */
+// #define XBYAK_USE_MEMFD
+#ifdef DNNL_XBYAK_NO_EXCEPTION
 #define XBYAK_NO_EXCEPTION
 #endif
 #if defined(_MSC_VER) && !defined(__INTEL_COMPILER)
